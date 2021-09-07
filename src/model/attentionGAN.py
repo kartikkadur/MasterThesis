@@ -1,7 +1,7 @@
 import torch
 import itertools
 
-from models.networks import init_net
+from model.networks import init_net
 from utils.tools import ImagePool
 from .base_model import Model
 from . import networks

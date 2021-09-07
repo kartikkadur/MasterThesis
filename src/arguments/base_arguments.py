@@ -1,14 +1,14 @@
 import argparse
 import os
 import torch
-import models
+import model
 import dataset
 
 from datetime import datetime
-from models import networks
+from model import networks
 from inspect import isclass
 from dataset.base_dataset import Dataset
-from models.base_model import Model
+from model.base_model import Model
 from utils.tools import module_to_dict
 
 
@@ -37,11 +37,11 @@ class Arguments():
         """Define the common arguments that are used in both training and test."""
         # basic parameters
         parser.add_argument('--dataroot', required=True, help='root folder of the dataset')
-        parser.add_argument('--name', type=str, default=f'{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}', help='name of the experiment. It decides where to store samples and models')
+        parser.add_argument('--name', type=str, default=f'{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}', help='name of the experiment. It decides where to store samples and model')
         parser.add_argument('--gpu_ids', type=str, default='0', help='gpu ids: e.g. 0  0,1,2, 0,2. use -1 for CPU')
-        parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints', help='models are saved here')
+        parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints', help='model are saved here')
         # model parameters
-        parser.add_argument('--model', type=str, default='AttentionGANModel', choices=get_modules(models, superclass=Model), help='chooses which model to use.')
+        parser.add_argument('--model', type=str, default='AttentionGANModel', choices=get_modules(model, superclass=Model), help='chooses which model to use.')
         parser.add_argument('--input_nc', type=int, default=3, help='# of input image channels: 3 for RGB and 1 for grayscale')
         parser.add_argument('--output_nc', type=int, default=3, help='# of output image channels: 3 for RGB and 1 for grayscale')
         parser.add_argument('--ngf', type=int, default=64, help='# of gen filters in the last conv layer')
@@ -68,7 +68,7 @@ class Arguments():
         parser.add_argument('--display_winsize', type=int, default=256, help='display window size for both visdom and HTML')
         # additional parameters
         parser.add_argument('--epoch', type=str, default='latest', help='which epoch to load? set to latest to use latest cached model')
-        parser.add_argument('--load_iter', type=int, default='0', help='which iteration to load? if load_iter > 0, the code will load models by iter_[load_iter]; otherwise, the code will load models by [epoch]')
+        parser.add_argument('--load_iter', type=int, default='0', help='which iteration to load? if load_iter > 0, the code will load model by iter_[load_iter]; otherwise, the code will load model by [epoch]')
         parser.add_argument('--verbose', action='store_true', help='if specified, print more debugging information')
         parser.add_argument('--suffix', default='', type=str, help='customized suffix: args.name = args.name + suffix: e.g., {model}_{netG}_size{load_size}')
         self.initialized = True
@@ -86,7 +86,7 @@ class Arguments():
         args, _ = parser.parse_known_args()
 
         # modify model-related parser arguments
-        model_argument_setter = module_to_dict(models)[args.model].modify_commandline_arguments
+        model_argument_setter = module_to_dict(model)[args.model].modify_commandline_arguments
         parser = model_argument_setter(parser, self.isTrain)
         args, _ = parser.parse_known_args()
 
@@ -146,7 +146,7 @@ class Arguments():
         # set model and dataset classes
         args.netG = module_to_dict(networks)[args.netG]
         args.netD = module_to_dict(networks)[args.netD]
-        args.model = module_to_dict(models)[args.model]
+        args.model = module_to_dict(model)[args.model]
         args.dataset = module_to_dict(dataset)[args.dataset]
         args.norm_layer = module_to_dict(torch.nn)[args.norm_layer]
 

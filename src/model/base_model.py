@@ -4,7 +4,7 @@ import utils.tools as tools
 import sys
 import tqdm
 
-from models import networks
+from model import networks
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from utils.tools import AverageMeter

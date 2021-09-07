@@ -4,9 +4,9 @@ import sys
 import torch
 
 from dataset.cifar10 import Cifar10
-from models.base_model import Model
+from model.base_model import Model
 import torch.nn.functional as F
-from models.networks import ResnetBlock
+from model.networks import ResnetBlock
 """
 class ResnetBlock1(nn.Module):
     '''Define a Resnet block'''
@@ -110,7 +110,7 @@ if __name__ == '__main__':
 if __name__ == '__main__':
     from arguments.train_arguments import TrainArguments
     from dataset.multiclass_dataset import MultiClassDataset
-    from models.attentionGAN import AttentionGANModel
+    from model.attentionGAN import AttentionGANModel
     args = TrainArguments().parse()
     dataset = MultiClassDataset(args)
     from torch.utils.data import DataLoader
