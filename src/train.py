@@ -1,46 +1,23 @@
-import os
-import tools
-import torch
-
+import time
 from arguments.train_arguments import TrainArguments
+from dataset import create_dataset
+from models import create_model
+#from util.visualizer import Visualizer
 
-def create_dataloaders(block, args):
-    block.log("Creating train and valid  data loaders")
-    trainset = args.dataset_class(args, is_training=True)
-    trainloader = torch.utils.data.DataLoader(trainset,
-                                              batch_size=args.batch_size,
-                                              num_workers=args.num_workers,
-                                              drop_last=True)
-    valset = args.dataset_class(args, is_training=False)
-    valloader = torch.utils.data.DataLoader(valset,
-                                            batch_size=args.batch_size,
-                                            num_workers=args.num_workers,
-                                            drop_last=True)
-    return trainloader, valloader
-
-def set_random_seed(args):
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
-
-def train(block, args):
-    # build dataset
-    trainloader, valloader = create_dataloaders(block, args)
-    block.log(f"Number of training samples : {len(trainloader)}")
-    block.log(f"Number of validation samples : {len(valloader)}")
-    # build and setup model
-    model = args.network_class(args)
-    model.setup()
+from models.attentionGAN import AttentionGANModel
 
 def main():
-    with tools.TimerBlock("Get Arguments") as block:
-        args = TrainArguments().parse(block)
+    args = TrainArguments().parse()   # get training options
+    dataset = create_dataset(args)  # create a dataset given opt.dataset_mode and other options
+    dataset_size = len(dataset)    # get the number of images in the dataset.
+    print('The number of training images = %d' % dataset_size)
 
-    with tools.TimerBlock("Setting random seed"):
-        set_random_seed(args)
-    
-    with tools.TimerBlock("Start training") as block:
-        args.logger = block
-        train(block, args)
+    #model = create_model(opt)      # create a model given opt.model and other options
+    model = AttentionGANModel(args)
+    #model.setup(opt)               # regular setup: load and print networks; create schedulers
+    #visualizer = Visualizer(opt)   # create a visualizer that display/save images and plots
+    total_iters = 0                # the total number of training iterations
+    model.fit()
 
 if __name__ == '__main__':
-    main()
+    args = TrainArguments().parse()

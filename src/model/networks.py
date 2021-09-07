@@ -99,10 +99,9 @@ def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
         gpu_ids (int list) : which GPUs the network runs on: e.g., 0,1,2
     Return an initialized network.
     """
-    if len(gpu_ids) > 0:
-        assert(torch.cuda.is_available())
-        net.to(gpu_ids[0])
-        net = torch.nn.DataParallel(net, gpu_ids)  # multi-GPUs
+    if torch.cuda.is_available():
+        net.to('cuda')
+        #net = torch.nn.DataParallel(net, gpu_ids)  # multi-GPUs
     init_weights(net, init_type, init_gain=init_gain)
     return net
 
@@ -132,13 +131,13 @@ def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, in
     norm_layer = get_norm_layer(norm_type=norm)
 
     if netG == 'resnet_9blocks':
-        net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9)
+        net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9, use_attention=True)
     elif netG == 'resnet_6blocks':
-        net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=6)
+        net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=6, use_attention=True)
     elif netG == 'unet_128':
-        net = UnetGenerator(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
+        net = UnetGenerator(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout, use_attention=True)
     elif netG == 'unet_256':
-        net = UnetGenerator(input_nc, output_nc, 8, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
+        net = UnetGenerator(input_nc, output_nc, 8, ngf, norm_layer=norm_layer, use_dropout=use_dropout, use_attention=True)
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
     return init_net(net, init_type, init_gain, gpu_ids)
@@ -234,7 +233,7 @@ class ResnetGenerator(nn.Module):
                        use_dropout : bool = False,
                        padding_type : str = 'reflect',
                        use_attention : bool = True) -> None:
-         """Construct a Resnet-based generator with attention
+        """Construct a Resnet-based generator with attention
         Parameters:
             input_nc (int)      : the number of channels in input images
             output_nc (int)     : the number of channels in output images
@@ -248,46 +247,45 @@ class ResnetGenerator(nn.Module):
         """
         super(ResnetGenerator, self).__init__()
         assert(n_blocks >= 0)
-
         self.attention = use_attention
-
         if type(norm_layer) == functools.partial:
-            self.use_bias = norm_layer.func == nn.InstanceNorm2d
+            use_bias = norm_layer.func == nn.InstanceNorm2d
         else:
-            self.use_bias = norm_layer == nn.InstanceNorm2d
+            use_bias = norm_layer == nn.InstanceNorm2d
         # initial conv block
         init_conv_block = [nn.ReflectionPad2d(3),
                             nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0, bias=use_bias),
                             norm_layer(ngf),
                             nn.ReLU(True)]
         # downsampling blocks
+        downsample_blocks = []
         for i in range(n_downsampling):
             mult = 2 ** i
-            downsample_blocks = [nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1, bias=use_bias),
+            downsample_blocks += [nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1, bias=use_bias),
                       norm_layer(ngf * mult * 2),
                       nn.ReLU(True)]
         # ResNet blocks
+        resnet_blocks = []
         mult = 2 ** n_downsampling
         for i in range(n_blocks):
-            resnet_blocks = [ResnetBlock(ngf * mult, ngf * mult, norm_layer=norm_layer, dropout=use_dropout, padding=padding_type]
+            resnet_blocks += [ResnetBlock(ngf * mult, ngf * mult, norm_layer=norm_layer, dropout=use_dropout, padding=padding_type)]
         # upsampling blocks
+        upsample_blocks = []
         for i in range(n_downsampling):
             mult = 2 ** (n_downsampling - i)
-            upsample_blocks = [nn.ConvTranspose2d(ngf * mult, (ngf * mult)//2,
+            upsample_blocks += [nn.ConvTranspose2d(ngf * mult, (ngf * mult)//2,
                                          kernel_size=3, stride=2,
                                          padding=1, output_padding=1,
                                          bias=use_bias),
                       norm_layer(int(ngf * mult / 2)),
                       nn.ReLU(True)]
-
         # final conv block
         final_conv_block = [nn.ReflectionPad2d(3),
                             nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0),
                             nn.Tanh()]
-        
         # initialize the translator network model
         self.translator_net = nn.Sequential(*(init_conv_block + downsample_blocks + resnet_blocks + upsample_blocks + final_conv_block))
-        
+        # initialize attention model
         if self.attention:
             # final attention layer with a single channel attention mask output
             att_final_conv_block = [nn.ReflectionPad2d(3),
@@ -298,12 +296,12 @@ class ResnetGenerator(nn.Module):
                                                 + resnet_blocks[:n_blocks//2]
                                                 + upsample_blocks
                                                 + att_final_conv_block))
-    
+
     def forward(self, x):
         if self.attention:
-            att = self.attention_net(x)
             out = self.translator_net(x)
-            return att * out + (1 - att) * x
+            att = self.attention_net(x)
+            return att * out + (1 - att) * x, att
         else:
             return self.translator_net(x)
 
@@ -334,11 +332,8 @@ class ResnetBlock(nn.Module):
         super(ResnetBlock, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
-        
-
         self.padding = None
         self.dropout = None
-
         # initialize padding
         p=0
         if padding == 'reflect':
@@ -347,11 +342,9 @@ class ResnetBlock(nn.Module):
             self.padding = nn.ReplicationPad2d(1)
         else:
             p=1
-        
         # initialize dropout
         if dropout:
             self.dropout = nn.Dropout(0.5)
-
         # assign a downsample layer
         if (in_channels != out_channels or stride > 1) and downsample is None:
             self.downsample = nn.Sequential(
@@ -360,7 +353,6 @@ class ResnetBlock(nn.Module):
                             )
         else:
             self.downsample = downsample
-
         # calculate initial filter width based on base_width and groups
         width = int(out_channels * (base_width / 64.)) * groups
 
@@ -374,32 +366,23 @@ class ResnetBlock(nn.Module):
 
     def forward(self, x):
         identity = x
-
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
-
         if self.padding:
             out = self.padding(x)
-
         out = self.conv2(out)
         out = self.bn2(out)
         out = self.relu(out)
-
         if self.dropout:
             out = self.dropout(out)
-
         out = self.conv3(out)
         out = self.bn3(out)
-
         if self.downsample:
             identity = self.downsample(x)
-
         out += identity
         out = self.relu(out)
-
         return out
-
 
 class UnetGenerator(nn.Module):
     """Create a Unet-based generator"""
@@ -441,7 +424,7 @@ class UnetGenerator(nn.Module):
         if self.attention:
             att = self.attention_net(x)
             out = self.translator_net(x)
-            return att * out + (1 - att) * x
+            return att * out + (1 - att) * x, att
         else:
             return self.translator_net(x)
 
@@ -451,11 +434,10 @@ class UnetSkipConnectionBlock(nn.Module):
         X -------------------identity----------------------
         |-- downsampling -- |submodule| -- upsampling --|
     """
-
     def __init__(self, outer_nc : int,
                        inner_nc : int,
                        input_nc : int = None,
-                       submodule : UnetSkipConnectionBlock = None,
+                       submodule : nn.Module = None,
                        outermost : bool = False,
                        innermost : bool = False,
                        norm_layer : nn.Module = nn.BatchNorm2d,
@@ -520,7 +502,6 @@ class UnetSkipConnectionBlock(nn.Module):
         else:   # add skip connections
             return torch.cat([x, self.model(x)], 1)
 
-
 class NLayerDiscriminator(nn.Module):
     """Defines a PatchGAN discriminator"""
 
@@ -543,7 +524,7 @@ class NLayerDiscriminator(nn.Module):
         sequence = [nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw), nn.LeakyReLU(0.2, True)]
         nf_mult = 1
         nf_mult_prev = 1
-        for n in range(1, n_layers):  # gradually increase the number of filters
+        for n in range(1, n_layers):
             nf_mult_prev = nf_mult
             nf_mult = min(2 ** n, 8)
             sequence += [

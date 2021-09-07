@@ -1,11 +1,22 @@
-import argparse
-from .base_arguments import BaseArguments
+from .base_arguments import Arguments
 
-class TestArguments(BaseArguments):
+
+class TestArguments(Arguments):
+    """This class includes test arguments.
+    It also includes shared arguments defined in Arguments.
+    """
 
     def initialize(self, parser):
-        parser = BaseArguments.initialize(self, parser)
-        # other training parameters
-        parser.add_argument('--seed', default=1234, type=int, metavar="SEED",
-                            help='seed for initializing training. ')
+        parser = Arguments.initialize(self, parser)  # define shared arguments
+        parser.add_argument('--results_dir', type=str, default='./results/', help='saves results here.')
+        parser.add_argument('--aspect_ratio', type=float, default=1.0, help='aspect ratio of result images')
+        parser.add_argument('--phase', type=str, default='test', help='train, val, test, etc')
+        # Dropout and Batchnorm has different behavioir during training and test.
+        parser.add_argument('--eval', action='store_true', help='use eval mode during test time.')
+        parser.add_argument('--num_test', type=int, default=50, help='how many test images to run')
+        # rewrite devalue values
+        parser.set_defaults(model='test')
+        # To avoid cropping, the load_size should be the same as crop_size
+        parser.set_defaults(load_size=parser.get_default('crop_size'))
+        self.isTrain = False
         return parser

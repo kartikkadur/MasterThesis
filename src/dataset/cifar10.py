@@ -6,14 +6,15 @@ import torchvision.transforms as transforms
 import numpy as np
 
 from torch.utils.data import Dataset
-from .base_dataset import BaseDataset
+#from .base_dataset import BaseDataset
 
-class Cifar10(BaseDataset):
+class Cifar10(Dataset):
     def __init__(self, root, is_training=False, transform=None):
-        super(Cifar10, self).__init__(root, is_training, transform)
+        #super(Cifar10, self).__init__(root, is_training, transform)
         # set transforms
-        super(Cifar10, self).transforms(transform)
-
+        #super(Cifar10, self).transforms(transform)
+        self.root = root
+        self.transforms = transform
         self.is_training = is_training
         self.images, self.labels = self.get_cifar_data(self.root)
         self.classes = ('plane', 'car', 'bird', 'cat',
@@ -46,8 +47,11 @@ class Cifar10(BaseDataset):
         image = self.images[index]
         label = self.labels[index]
         # if training apply transforms
-        #if self.is_training:
-        image = self.transforms(image)
+        if self.is_training and self.transforms:
+            image = self.transforms(image)
+        else:
+            self.transforms = transforms.Compose([transforms.ToTensor()])
+            image = self.transforms(image)
         return {"image" : image, "label" : label, "class" : self.classes[label]}
 
 if __name__=='__main__':
