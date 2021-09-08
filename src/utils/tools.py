@@ -5,6 +5,8 @@ import torch
 import random
 
 from inspect import isclass
+from collections import OrderedDict
+
 
 ######################
 ### Helper methods ###
@@ -23,6 +25,50 @@ def param_to_str(**kwargs):
 #########################
 #### Helper classes #####
 #########################
+
+class AttributeDict(OrderedDict):
+    """
+    class that provides attribute like access to OrderdDict objects
+    """
+    def __init__(self, *args, **kwargs):
+        super(AttributeDict, self).__init__(*args, **kwargs)
+        for arg in args:
+            if isinstance(arg, dict):
+                for k, v in arg.iteritems():
+                    self[k] = v
+
+        if kwargs:
+            for k, v in kwargs.iteritems():
+                self[k] = v
+
+    def __getattr__(self, attr):
+        return self.get(attr)
+
+    def __setattr__(self, key, value):
+        if isinstance(self.get(key), AverageMeter):
+            self.get(key).update(value)
+        else:
+            self.__setitem__(key, value)
+
+    def __setitem__(self, key, value):
+        super(AttributeDict, self).__setitem__(key, value)
+        self.__dict__.update({key: value})
+
+    def __delattr__(self, item):
+        self.__delitem__(item)
+    
+    def add(self, attr_names):
+        """
+        adds an attribute with AverageMeter value which keeps
+        track of the average, sum and current value.
+        """
+        if not isinstance(attr_names, list):
+            attr_names = [attr_names]
+        
+        for attr in attr_names:
+            assert(isinstance(attr, str))
+            self[attr] = AverageMeter(attr)
+
 class TimerBlock:
     def __init__(self, title):
         print(("{}".format(title)))
@@ -56,13 +102,13 @@ class AverageMeter(object):
         self.reset()
 
     def reset(self):
-        self.val = []
+        self.val = 0
         self.avg = 0
         self.sum = 0
         self.count = 0
 
     def update(self, val, n=1):
-        self.val.append(val)
+        self.val = val
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count

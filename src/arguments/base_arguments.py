@@ -28,9 +28,7 @@ class Arguments():
     """
     This class defines arguments used during both training and test time.
     """
-
     def __init__(self):
-        """Reset the class; indicates the class hasn't been initailized"""
         self.initialized = False
 
     def initialize(self, parser):
@@ -80,8 +78,7 @@ class Arguments():
         """
         if not self.initialized:
             parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-            parser = self.initialize(parser)
-
+            self.initialize(parser)
         # get the basic arguments
         args, _ = parser.parse_known_args()
 
@@ -96,6 +93,7 @@ class Arguments():
 
         # save and return the parser
         self.parser = parser
+
         return parser.parse_args()
 
     def print_arguments(self, args):

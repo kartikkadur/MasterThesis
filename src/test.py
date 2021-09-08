@@ -1,3 +1,4 @@
+"""
 import torch.nn as nn
 import os
 import sys
@@ -7,7 +8,7 @@ from dataset.cifar10 import Cifar10
 from model.base_model import Model
 import torch.nn.functional as F
 from model.networks import ResnetBlock
-"""
+
 class ResnetBlock1(nn.Module):
     '''Define a Resnet block'''
 

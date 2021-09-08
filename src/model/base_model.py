@@ -8,7 +8,7 @@ from model import networks
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from utils.tools import AverageMeter
-
+from utils.tools import AttributeDict
 
 class Model(torch.nn.Module, ABC):
     """
@@ -26,12 +26,13 @@ class Model(torch.nn.Module, ABC):
         self.save_dir = os.path.join(args.checkpoints_dir, args.name)
         # create save directories
         os.makedirs(self.save_dir, exist_ok=True)
-        # optimizer and criterion lists
-        self.criterion = []
-        self.optimizers = []
-        # train and val losses
-        self.train_loss_values = OrderedDict()
-        self.val_loss_values = OrderedDict()
+        # networks used
+        self.models = AttributeDict()
+        self.criterion = AttributeDict()
+        self.optimizer = AttributeDict()
+        # losses that is calculated
+        self.loss = AttributeDict()
+        self.val_loss = AttributeDict()
     
     @staticmethod
     def modify_commandline_arguments(parser, isTrain=True):
@@ -61,13 +62,12 @@ class Model(torch.nn.Module, ABC):
         Override this method for specific implementation of optimizing the parameters.
         """
         if self.is_compiled:
-            self.optimizers[0].zero_grad()
+            self.optimizer[0].zero_grad()
             pred = self.forward()
-            loss = self.criterion[0](pred, self.labels)
+            self.loss.loss = self.criterion[0](pred, self.labels)
             if is_train:
-                loss.backward()
-                self.optimizers[0].step()
-            self.update_losses(self.loss_names[0], loss, is_train)
+                self.loss.loss.val.backward()
+                self.optimizer[0].step()
         else:
             sys.exit('call model.compile() method before calling fit')
     
@@ -75,65 +75,73 @@ class Model(torch.nn.Module, ABC):
         """
         sets up optimizers
         """
-        for opt in optimizer:
+        for i, opt in enumerate(optimizer):
             if isinstance(opt, str):
                 try:
-                    self.optimizers += [tools.module_to_dict(torch.optim)[opt](self.parameters())]
+                    self.optimizer[opt] = tools.module_to_dict(torch.optim)[opt](self.parameters())
                 except KeyError as exp:
                     tqdm.tqdm.write(f'{opt} is not a valied optimizer')
                     sys.exit(1)
             elif isinstance(opt, torch.optim.Optimizer):
-                self.optimizers += [opt]
+                if self.optimizer.has_key(opt.__name__):
+                    self.optimizer[f'{opt.__name__}_{i}'] = opt
+                else:
+                    self.optimizer[opt.__name__] = opt
     
     def _init_criterion(self, criterion):
         """
         set up losses
         """
-        for loss in criterion:
+        for i, loss in enumerate(criterion):
             if isinstance(loss, str):
                 try:
-                    self.criterion += [tools.module_to_dict(torch.nn)[loss]()]
+                    self.criterion[loss] = tools.module_to_dict(torch.nn)[loss]()
                 except KeyError as exp:
                     tqdm.tqdm.write(f"{loss} is not a valied criterion")
                     sys.exit(1)
             elif isinstance(loss, torch.nn.Module):
-                self.criterion += [loss]
+                if self.criterion.has_key(opt.__name__):
+                    self.criterion[f'{loss.__name__}_{i}'] = loss
+                else:
+                    self.criterion[loss.__name__] = loss
     
-    def _init_losses(self, losses):
+    def _init_loss(self, losses):
         """
         initalize the losses that is being logged
         """
-        for loss in losses:
-            self.train_loss_values[loss] = AverageMeter(loss)
-            self.val_loss_values[loss] = AverageMeter(loss)
+        if not losses:
+            losses = ['loss']
+        elif not isinstance(losses, list):
+            losses = [losses]
+        # initialize losses
+        self.loss.add(losses)
+        self.val_loss.add(losses)
 
     def compile(self, optimizer=None,
                       criterion=None,
                       loss_names = None,
-                      model_names=None,
                       metrics=None,
                       loss_weights=None,
                       weighted_metrics=None):
         """
         setup criterion and optimizer
         """
-        assert optimizer != None, "parameter 'optimizer' cannot be None type"
-        assert criterion != None, "parameter 'criterion' cannot be None type"
-        # convert to a list
-        criterion = [criterion] if not isinstance(criterion, list) else criterion
-        optimizer = [optimizer] if not isinstance(optimizer, list) else optimizer
+        # initialize optimizer and criterion if passed
+        if optimizer:
+            optimizer = [optimizer] if not isinstance(optimizer, list) else optimizer
+            self._init_optimizer(optimizer)
         
-        metrics = metrics if metrics is not None else ['acc', 'loss']
-        # initialize optimizer, schedulers and criterion
-        self._init_optimizer(optimizer)
-        self._init_criterion(criterion)
-        
-        self.schedulers = [networks.get_scheduler(optimizer, self.args) for optimizer in self.optimizers]
-
+        if criterion:
+            criterion = [criterion] if not isinstance(criterion, list) else criterion
+            self._init_criterion(criterion)
+        # check if optimizer and criterion has been added
+        assert(len(self.optimizer.keys()) > 0)
+        assert(len(self.criterion.keys()) > 0)
+        # inti schedulers
+        self.schedulers = [networks.get_scheduler(self.optimizer[opt], self.args) for opt in self.optimizer]
         # assign model and loss names
-        self.model_names = model_names if model_names is not None else []
-        self.loss_names = loss_names if loss_names is not None else ['loss']
-        self._init_losses(self.loss_names)
+        if loss_names:
+            self._init_loss(loss_names)
         # set compiled as true
         self.is_compiled = True
 
@@ -143,23 +151,18 @@ class Model(torch.nn.Module, ABC):
         """
         assert os.path.exists(path), f"The path {path} does't exist. Provide a correct checkpoint path"
         checkpoint = torch.load(path)
-        self.load_state_dict(checkpoint)
+        for name, model in self.models.items():
+            model.load_state_dict(checkpoint[name])
 
     def save(self, save_path):
         """
         save model weights
         """
+        checkpoint = dict()
+        for name, model in self.models.items():
+            checkpoint[name] = model.state_dict()
+        torch.save(checkpoint, save_path)
         tqdm.tqdm.write(f"Model saved in : {save_path}")
-        torch.save(self.state_dict(), save_path)
-    
-    def update_losses(self, name, value, is_train=True):
-        """
-        updates metrics
-        """
-        if is_train:
-            self.train_loss_values[name].update(value)
-        else:
-            self.val_loss_values[name].update(value)
 
     def update_learning_rate(self):
         """
@@ -171,7 +174,7 @@ class Model(torch.nn.Module, ABC):
             else:
                 scheduler.step()
 
-        lr = self.optimizers[0].param_groups[0]['lr']
+        lr = self.optimizer[next(iter(self.optimizer))].param_groups[0]['lr']
         tqdm.tqdm.write('learning rate = %.7f' % lr)
 
     def fit(self, train_data=None,
@@ -235,9 +238,9 @@ class Model(torch.nn.Module, ABC):
         """
         errors = OrderedDict()
         if is_train:
-            loss_values = self.train_loss_values
+            loss_values = self.loss
         else:
-            loss_values = self.val_loss_values
+            loss_values = self.val_loss
 
         for loss in loss_values:
             errors[loss] = loss_values[loss].avg

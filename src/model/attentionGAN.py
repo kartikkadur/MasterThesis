@@ -28,18 +28,18 @@ class AttentionGANModel(Model):
         super(AttentionGANModel, self).__init__(args)
         # loss names
         loss_names = ['D_A', 'G_A', 'cycle_A', 'idt_A', 'D_B', 'G_B', 'cycle_B', 'idt_B']
+        # define generators
+        self.models.netG_A = init_net(args.netG(args.input_nc, args.output_nc, args.ngf, norm_layer=args.norm_layer, n_blocks=args.n_blocks_G, use_attention=True))
+        self.models.netG_B = init_net(args.netG(args.input_nc, args.output_nc, args.ngf, norm_layer=args.norm_layer, n_blocks=args.n_blocks_G, use_attention=True))
+        # define discriminators
+        if self.isTrain:
+            self.models.netD_A = init_net(args.netD(args.input_nc, args.ndf, n_layers=args.n_layers_D, norm_layer=args.norm_layer))
+            self.models.netD_B = init_net(args.netD(args.input_nc, args.ndf, n_layers=args.n_layers_D, norm_layer=args.norm_layer))
         # model names
         if self.isTrain:
             model_names = ['G_A', 'G_B', 'D_A', 'D_B']
         else:  # during test time, only load Gs
             model_names = ['G_A', 'G_B']
-        # define generators
-        self.netG_A = init_net(args.netG(args.input_nc, args.output_nc, args.ngf, norm_layer=args.norm_layer, n_blocks=args.n_blocks_G, use_attention=True))
-        self.netG_B = init_net(args.netG(args.input_nc, args.output_nc, args.ngf, norm_layer=args.norm_layer, n_blocks=args.n_blocks_G, use_attention=True))
-        # define discriminators
-        if self.isTrain:
-            self.netD_A = init_net(args.netD(args.input_nc, args.ndf, n_layers=args.n_layers_D, norm_layer=args.norm_layer))
-            self.netD_B = init_net(args.netD(args.input_nc, args.ndf, n_layers=args.n_layers_D, norm_layer=args.norm_layer))
 
         if self.isTrain:
             if args.lambda_identity > 0.0:  # only works when input and output images have the same number of channels
@@ -47,19 +47,14 @@ class AttentionGANModel(Model):
             self.fake_A_pool = ImagePool(args.pool_size)  # create image buffer to store previously generated images
             self.fake_B_pool = ImagePool(args.pool_size)  # create image buffer to store previously generated images
             # define loss functions
-            self.criterionGAN = loss.GANLoss(args.gan_mode).to(self.device)
-            self.criterionCycle = torch.nn.L1Loss()
-            self.criterionIdt = torch.nn.L1Loss()
-            criterion = [self.criterionGAN, self.criterionCycle, self.criterionIdt]
+            self.criterion.GAN = loss.GANLoss(args.gan_mode).to(self.device)
+            self.criterion.Cycle = torch.nn.L1Loss()
+            self.criterion.Idt = torch.nn.L1Loss()
             # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
-            self.optimizer_G = torch.optim.Adam(itertools.chain(self.netG_A.parameters(), self.netG_B.parameters()), lr=args.lr, betas=(args.beta1, 0.999))
-            self.optimizer_D = torch.optim.Adam(itertools.chain(self.netD_A.parameters(), self.netD_B.parameters()), lr=args.lr, betas=(args.beta1, 0.999))
-            optimizers = [self.optimizer_G, self.optimizer_D]
+            self.optimizer.G = torch.optim.Adam(itertools.chain(self.models.netG_A.parameters(), self.models.netG_B.parameters()), lr=args.lr, betas=(args.beta1, 0.999))
+            self.optimizer.D = torch.optim.Adam(itertools.chain(self.models.netD_A.parameters(), self.models.netD_B.parameters()), lr=args.lr, betas=(args.beta1, 0.999))
             # compile model
-            super(AttentionGANModel, self).compile(optimizer=optimizers,
-                                               criterion=criterion,
-                                               loss_names=loss_names,
-                                               model_names=model_names)
+            super(AttentionGANModel, self).compile(loss_names=loss_names)
 
     def set_inputs(self, input):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
@@ -74,10 +69,10 @@ class AttentionGANModel(Model):
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
-        self.fake_B, self.att_real_A = self.netG_A(self.real_A)  # G_A(A)
-        self.rec_A, self.att_rec_B = self.netG_B(self.fake_B)   # G_B(G_A(A))
-        self.fake_A, self.att_real_B = self.netG_B(self.real_B)  # G_B(B)
-        self.rec_B, self.att_rec_A = self.netG_A(self.fake_A)   # G_A(G_B(B))
+        self.fake_B, self.att_real_A = self.models.netG_A(self.real_A)  # G_A(A)
+        self.rec_A, self.att_rec_B = self.models.netG_B(self.fake_B)   # G_B(G_A(A))
+        self.fake_A, self.att_real_B = self.models.netG_B(self.real_B)  # G_B(B)
+        self.rec_B, self.att_rec_A = self.models.netG_A(self.fake_A)   # G_A(G_B(B))
 
     def backward_D_basic(self, netD, real, fake):
         """Calculate GAN loss for the discriminator
@@ -90,10 +85,10 @@ class AttentionGANModel(Model):
         """
         # Real
         pred_real = netD(real)
-        loss_D_real = self.criterionGAN(pred_real, True)
+        loss_D_real = self.criterion.GAN(pred_real, True)
         # Fake
         pred_fake = netD(fake.detach())
-        loss_D_fake = self.criterionGAN(pred_fake, False)
+        loss_D_fake = self.criterion.GAN(pred_fake, False)
         # Combined loss and calculate gradients
         loss_D = (loss_D_real + loss_D_fake) * 0.5
         loss_D.backward()
@@ -102,14 +97,12 @@ class AttentionGANModel(Model):
     def backward_D_A(self):
         """Calculate GAN loss for discriminator D_A"""
         fake_B = self.fake_B_pool.query(self.fake_B)
-        self.loss_D_A = self.backward_D_basic(self.netD_A, self.real_B, fake_B)
-        self.update_losses('D_A', self.loss_D_A)
+        self.loss.D_A = self.backward_D_basic(self.models.netD_A, self.real_B, fake_B)
 
     def backward_D_B(self):
         """Calculate GAN loss for discriminator D_B"""
         fake_A = self.fake_A_pool.query(self.fake_A)
-        self.loss_D_B = self.backward_D_basic(self.netD_B, self.real_A, fake_A)
-        self.update_losses('D_B', self.loss_D_B)
+        self.loss.D_B = self.backward_D_basic(self.models.netD_B, self.real_A, fake_A)
 
     def backward_G(self):
         """Calculate the loss for generators G_A and G_B"""
@@ -119,30 +112,25 @@ class AttentionGANModel(Model):
         # Identity loss
         if lambda_idt > 0:
             # G_A should be identity if real_B is fed: ||G_A(B) - B||
-            self.idt_A, self.idt_att_A = self.netG_A(self.real_B)
-            self.loss_idt_A = self.criterionIdt(self.idt_A, self.real_B) * lambda_B * lambda_idt
+            self.idt_A, self.idt_att_A = self.models.netG_A(self.real_B)
+            self.loss.idt_A = self.criterion.Idt(self.idt_A, self.real_B) * lambda_B * lambda_idt
             # G_B should be identity if real_A is fed: ||G_B(A) - A||
-            self.idt_B, self.idt_att_B = self.netG_B(self.real_A)
-            self.loss_idt_B = self.criterionIdt(self.idt_B, self.real_A) * lambda_A * lambda_idt
+            self.idt_B, self.idt_att_B = self.models.netG_B(self.real_A)
+            self.loss.idt_B = self.criterion.Idt(self.idt_B, self.real_A) * lambda_A * lambda_idt
         else:
-            self.loss_idt_A = 0
-            self.loss_idt_B = 0
+            self.loss.idt_A = 0
+            self.loss.idt_B = 0
 
         # GAN loss D_A(G_A(A))
-        self.loss_G_A = self.criterionGAN(self.netD_A(self.fake_B), True)
+        self.loss.G_A = self.criterion.GAN(self.models.netD_A(self.fake_B), True)
         # GAN loss D_B(G_B(B))
-        self.loss_G_B = self.criterionGAN(self.netD_B(self.fake_A), True)
+        self.loss.G_B = self.criterion.GAN(self.models.netD_B(self.fake_A), True)
         # Forward cycle loss || G_B(G_A(A)) - A||
-        self.loss_cycle_A = self.criterionCycle(self.rec_A, self.real_A) * lambda_A
+        self.loss.cycle_A = self.criterion.Cycle(self.rec_A, self.real_A) * lambda_A
         # Backward cycle loss || G_A(G_B(B)) - B||
-        self.loss_cycle_B = self.criterionCycle(self.rec_B, self.real_B) * lambda_B
-        # update losses
-        self.update_losses('G_A', self.loss_G_A)
-        self.update_losses('G_B', self.loss_G_B)
-        self.update_losses('cycle_A', self.loss_cycle_A)
-        self.update_losses('cycle_B', self.loss_cycle_B)
+        self.loss.cycle_B = self.criterion.Cycle(self.rec_B, self.real_B) * lambda_B
         # combined loss and calculate gradients
-        self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_idt_A + self.loss_idt_B
+        self.loss_G = self.loss.G_A.val + self.loss.G_B.val + self.loss.cycle_A.val + self.loss.cycle_B.val + self.loss.idt_A.val + self.loss.idt_B.val
         self.loss_G.backward()
 
     def optimize_parameters(self):
@@ -150,13 +138,13 @@ class AttentionGANModel(Model):
         # forward
         self.forward()      # compute fake images and reconstruction images.
         # G_A and G_B
-        self.set_requires_grad([self.netD_A, self.netD_B], False)  # Ds require no gradients when optimizing Gs
-        self.optimizer_G.zero_grad()  # set G_A and G_B's gradients to zero
+        self.set_requires_grad([self.models.netD_A, self.models.netD_B], False)  # Ds require no gradients when optimizing Gs
+        self.optimizer.G.zero_grad()  # set G_A and G_B's gradients to zero
         self.backward_G()             # calculate gradients for G_A and G_B
-        self.optimizer_G.step()       # update G_A and G_B's weights
+        self.optimizer.G.step()       # update G_A and G_B's weights
         # D_A and D_B
-        self.set_requires_grad([self.netD_A, self.netD_B], True)
-        self.optimizer_D.zero_grad()   # set D_A and D_B's gradients to zero
+        self.set_requires_grad([self.models.netD_A, self.models.netD_B], True)
+        self.optimizer.D.zero_grad()   # set D_A and D_B's gradients to zero
         self.backward_D_A()      # calculate gradients for D_A
         self.backward_D_B()      # calculate graidents for D_B
-        self.optimizer_D.step()  # update D_A and D_B's weights
+        self.optimizer.D.step()  # update D_A and D_B's weights
