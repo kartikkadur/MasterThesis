@@ -1,8 +1,10 @@
 import torch
 import itertools
 
+from torch.autograd import Variable
 from model.networks import init_net
 from utils.tools import ImagePool
+from utils.tools import mask_to_heatmap, overlay
 from .base_model import Model
 from . import networks
 from . import loss
@@ -18,6 +20,9 @@ class AttentionGANModel(Model):
         if is_train:
             parser.add_argument('--lambda_A', type=float, default=10.0, help='weight for cycle loss (A -> B -> A)')
             parser.add_argument('--lambda_B', type=float, default=10.0, help='weight for cycle loss (B -> A -> B)')
+            parser.add_argument('--lambda_att_A', type=float, default=1.0, help='weight for attention cycle loss (A -> B -> A)')
+            parser.add_argument('--lambda_att_B', type=float, default=1.0, help='weight for attention cycle loss (B -> A -> B)')
+            parser.add_argument('--lambda_att_cycle', type=float, default=1.0, help='weight for attention cycle loss')
             parser.add_argument('--lambda_identity', type=float, default=0.5, help='use identity mapping. Setting lambda_identity other than 0 has an effect of scaling the weight of the identity mapping loss. For example, if the weight of the identity loss should be 10 times smaller than the weight of the reconstruction loss, please set lambda_identity = 0.1')
 
         return parser
@@ -27,7 +32,8 @@ class AttentionGANModel(Model):
         """
         super(AttentionGANModel, self).__init__(args)
         # loss names
-        loss_names = ['D_A', 'G_A', 'cycle_A', 'idt_A', 'D_B', 'G_B', 'cycle_B', 'idt_B']
+        self.print_losses = ['D_A', 'G_A', 'cycle_A', 'idt_A', 'D_B', 'G_B', 'cycle_B', 'idt_B']
+        self.visuals = ['real_A', 'real_B', 'fake_A', 'fake_B', 'rec_A', 'rec_B', 'attn_real_A', 'attn_real_B', 'attn_fake_A', 'attn_fake_B']
         # define generators
         self.models.netG_A = init_net(args.netG(args.input_nc, args.output_nc, args.ngf, norm_layer=args.norm_layer, n_blocks=args.n_blocks_G, use_attention=True))
         self.models.netG_B = init_net(args.netG(args.input_nc, args.output_nc, args.ngf, norm_layer=args.norm_layer, n_blocks=args.n_blocks_G, use_attention=True))
@@ -35,11 +41,6 @@ class AttentionGANModel(Model):
         if self.isTrain:
             self.models.netD_A = init_net(args.netD(args.input_nc, args.ndf, n_layers=args.n_layers_D, norm_layer=args.norm_layer))
             self.models.netD_B = init_net(args.netD(args.input_nc, args.ndf, n_layers=args.n_layers_D, norm_layer=args.norm_layer))
-        # model names
-        if self.isTrain:
-            model_names = ['G_A', 'G_B', 'D_A', 'D_B']
-        else:  # during test time, only load Gs
-            model_names = ['G_A', 'G_B']
 
         if self.isTrain:
             if args.lambda_identity > 0.0:  # only works when input and output images have the same number of channels
@@ -54,7 +55,12 @@ class AttentionGANModel(Model):
             self.optimizer.G = torch.optim.Adam(itertools.chain(self.models.netG_A.parameters(), self.models.netG_B.parameters()), lr=args.lr, betas=(args.beta1, 0.999))
             self.optimizer.D = torch.optim.Adam(itertools.chain(self.models.netD_A.parameters(), self.models.netD_B.parameters()), lr=args.lr, betas=(args.beta1, 0.999))
             # compile model
-            super(AttentionGANModel, self).compile(loss_names=loss_names)
+            super(AttentionGANModel, self).compile(loss_names=self.print_losses)
+            # zeros and ones
+            self.zeros = torch.zeros((args.batch_size, 1, args.crop_size, args.crop_size))
+            self.ones = torch.ones((args.batch_size, 1, args.crop_size, args.crop_size))
+            self.att_zero = Variable(self.zeros, requires_grad=False).to(self.device)
+            self.att_ones = Variable(self.ones, requires_grad=False).to(self.device)
 
     def set_inputs(self, input):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
@@ -129,8 +135,16 @@ class AttentionGANModel(Model):
         self.loss.cycle_A = self.criterion.Cycle(self.rec_A, self.real_A) * lambda_A
         # Backward cycle loss || G_A(G_B(B)) - B||
         self.loss.cycle_B = self.criterion.Cycle(self.rec_B, self.real_B) * lambda_B
+        # Attention Losses
+        self.loss.att_sparse_A = self.criterion.Idt(self.att_real_A, self.att_zero) * self.args.lambda_att_A
+        self.loss.att_sparse_B = self.criterion.Idt(self.att_real_B, self.att_zero) * self.args.lambda_att_B
+        self.loss.att_const_A = self.criterion.Idt(self.att_rec_A, self.att_real_B.detach()) * self.args.lambda_att_cycle
+        self.loss.att_const_B = self.criterion.Idt(self.att_rec_B, self.att_real_A.detach()) * self.args.lambda_att_cycle
         # combined loss and calculate gradients
-        self.loss_G = self.loss.G_A.val + self.loss.G_B.val + self.loss.cycle_A.val + self.loss.cycle_B.val + self.loss.idt_A.val + self.loss.idt_B.val
+        self.loss_G = self.loss.G_A.val + self.loss.G_B.val + self.loss.cycle_A.val + \
+                      self.loss.cycle_B.val + self.loss.idt_A.val + self.loss.idt_B.val + \
+                      self.loss.att_sparse_A + self.loss.att_sparse_B + \
+                      self.loss.att_const_A + self.loss.att_const_B
         self.loss_G.backward()
 
     def optimize_parameters(self):
@@ -148,3 +162,13 @@ class AttentionGANModel(Model):
         self.backward_D_A()      # calculate gradients for D_A
         self.backward_D_B()      # calculate graidents for D_B
         self.optimizer.D.step()  # update D_A and D_B's weights
+
+    def compute_visuals(self):
+        attn_real_A = mask_to_heatmap(self.att_real_A.data)
+        attn_real_B = mask_to_heatmap(self.att_real_B.data)
+        attn_fake_A = mask_to_heatmap(self.att_rec_A.data)
+        attn_fake_B = mask_to_heatmap(self.att_rec_B.data)
+        self.attn_real_A = overlay(self.real_A, attn_real_A)
+        self.attn_real_B = overlay(self.real_B, attn_real_B)
+        self.attn_fake_A = overlay(self.fake_A, attn_fake_A)
+        self.attn_fake_B = overlay(self.fake_B, attn_fake_B)

@@ -33,6 +33,10 @@ class Model(torch.nn.Module, ABC):
         # losses that is calculated
         self.loss = AttributeDict()
         self.val_loss = AttributeDict()
+        #lossese to print
+        self.print_losses = []
+        # visuals
+        self.visuals = []
     
     @staticmethod
     def modify_commandline_arguments(parser, isTrain=True):
@@ -154,15 +158,15 @@ class Model(torch.nn.Module, ABC):
         for name, model in self.models.items():
             model.load_state_dict(checkpoint[name])
 
-    def save(self, save_path):
+    def save(self, epoch):
         """
         save model weights
         """
         checkpoint = dict()
         for name, model in self.models.items():
             checkpoint[name] = model.state_dict()
-        torch.save(checkpoint, save_path)
-        tqdm.tqdm.write(f"Model saved in : {save_path}")
+        torch.save(checkpoint, os.path.join(args.checkpoints_dir, f"{epoch}"))
+        tqdm.tqdm.write(f"Model saved in : {args.checkpoints_dir}")
 
     def update_learning_rate(self):
         """
@@ -177,44 +181,45 @@ class Model(torch.nn.Module, ABC):
         lr = self.optimizer[next(iter(self.optimizer))].param_groups[0]['lr']
         tqdm.tqdm.write('learning rate = %.7f' % lr)
 
-    def fit(self, train_data=None,
-                validation_data=None,
-                epochs=None,
-                start_epoch=0,
-                steps_per_epoch=None,
-                val_freq=None,
-                print_freq=1,
-                save_freq=None,
-                save_path=None):
+    def fit(self, train_data=None, validation_data=None, visualizer=None):
         """
         performes training loop operations
         """
         assert train_data != None, f'train_data cannot be of type None'
-        assert epochs != None, 'epoch cannot be of type None'
-
+        # start training
         self.train()
-        steps_per_epoch = steps_per_epoch if steps_per_epoch else len(train_data)
-        tqdm_iter = tqdm.tqdm(train_data)
-        for epoch in range(start_epoch, epochs):
+        steps_per_epoch = self.args.steps_per_epoch if self.args.steps_per_epoch else len(train_data)
+        #tqdm_iter = tqdm.tqdm(train_data, position=1)
+        for epoch in range(self.args.start_epoch, self.args.n_epochs):
             iteration = 0
-            for batch in tqdm_iter:
-                iteration += 1
-                if iteration == steps_per_epoch:
-                    break
-                # set inputs
-                self.set_inputs(batch)
-                # do forward ,backword and update loss values in a loss meter
-                self.optimize_parameters()
-                if iteration % print_freq == 0:
-                    tqdm_iter.set_description(f"Epoch: {epoch}, Losses : {tools.param_to_str(**self.get_losses())}")
-                iteration += 1
+            with tqdm.tqdm(total=steps_per_epoch, position=0) as discription_bar:
+                with tqdm.tqdm(train_data, position=1) as data_bar:
+                    for batch in data_bar:
+                        if iteration == steps_per_epoch:
+                            break
+                        # set inputs
+                        self.set_inputs(batch)
+                        # do forward ,backword and update loss values in a loss meter
+                        self.optimize_parameters()
+                        # update discription bar
+                        if iteration % self.args.print_freq == 0:
+                            discription_bar.set_description(tools.param_to_str(**self.get_losses()))
+                        # save visuals
+                        if iteration % self.args.display_freq == 0 and visualizer:
+                            visualizer.reset()
+                            self.compute_visuals()
+                            visualizer.display_current_results(self.get_visuals(),
+                                                                epoch,
+                                                                iteration % self.args.update_html_freq == 0)
+                        # increment iteration and set discription
+                        iteration += 1
+                        data_bar.set_description(f"Epoch : {epoch}")
             # do validation
-            if validation_data and val_freq and epoch % val_freq == 0:
+            if validation_data and self.args.val_freq and epoch % self.args.val_freq == 0:
                 self.evaluate(validation_data)
             # save model
-            if save_freq and epoch % save_freq == 0:
-                save_path = save_path if save_path is not None else os.getcwd()
-                self.save(save_path)
+            if self.args.save_freq and epoch % self.args.save_freq == 0:
+                self.save(epoch)
             #self.update_learning_rate()
 
     def evaluate(self, val_data, num_val_step=None):
@@ -242,10 +247,26 @@ class Model(torch.nn.Module, ABC):
         else:
             loss_values = self.val_loss
 
-        for loss in loss_values:
+        for loss in self.print_losses:
             errors[loss] = loss_values[loss].avg
         return errors
-    
+
+    def get_visuals(self):
+        """
+        returns the visuals that is added to self.visuals attribte and saves them.
+        """
+        visuals = OrderedDict()
+        for image in self.visuals:
+            if isinstance(image, str):
+                visuals[image] = getattr(self, image)
+        return visuals
+
+    def compute_visuals(self):
+        """
+        method for computing additional visuals that is to be saved.
+        """
+        pass
+
     def set_requires_grad(self, models, grad=False):
         """
         sets the gradient parameter

@@ -109,13 +109,15 @@ if __name__ == '__main__':
 """
 
 if __name__ == '__main__':
-    from arguments.train_arguments import TrainArguments
-    from dataset.multiclass_dataset import MultiClassDataset
-    from model.attentionGAN import AttentionGANModel
-    args = TrainArguments().parse()
-    dataset = MultiClassDataset(args)
-    from torch.utils.data import DataLoader
+    from tqdm import tqdm
+    import time
+    #pbar1 = tqdm(range(100))
+    #pbar2 = tqdm(range(100), position=0)
 
-    dataloader = DataLoader(dataset, batch_size=1)
-    model = args.model(args)
-    model.fit(dataloader, epochs=1, print_freq=1)
+    with tqdm(total=100) as pbar1:
+        for i in range(100):
+            print(i)
+            #pbar2.update(1)
+            time.sleep(1)
+            pbar1.set_description('pbar1')
+            pbar1.update(1)

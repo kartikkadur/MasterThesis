@@ -25,6 +25,8 @@ class GANLoss(nn.Module):
             self.loss = nn.MSELoss()
         elif gan_mode == 'vanilla':
             self.loss = nn.BCEWithLogitsLoss()
+        elif gan_mode == 'bce':
+            self.loss = nn.BCELoss()
         elif gan_mode in ['wgangp']:
             self.loss = None
         else:
