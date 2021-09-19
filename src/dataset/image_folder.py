@@ -11,15 +11,30 @@ def is_image_file(filename):
 
 
 def make_dataset(path, max_dataset_size=float("inf")):
-    images = []
     assert os.path.isdir(path), '%s is not a valid directory' % path
 
-    for root, _, fnames in sorted(os.walk(path)):
-        for fname in fnames:
-            if is_image_file(fname):
-                path = os.path.join(root, fname)
-                images.append(path)
+    images = [
+                os.path.join(fdir, fname)
+                for fdir, _, fnames in sorted(os.walk(path)) 
+                for fname in fnames if is_image_file(fname)
+            ]
     return images[:min(max_dataset_size, len(images))]
+
+
+def make_dataset_dict(path, max_dataset_size=float('inf')):
+    assert os.path.isdir(path), '%s is not a valid directory' % path
+
+    images = {}
+    for fdir, _, fnames in sorted(os.walk(path)):
+        if not fdir.startswith('.'):
+            for fname in fnames:
+                img_file = os.path.join(fdir, fname)
+                if is_image_file(img_file):
+                    if os.path.basename(fdir) in images.keys():
+                        images[os.path.basename(fdir)] += [img_file]
+                    else:
+                        images[os.path.basename(fdir)] = [img_file]
+    return images
 
 
 def default_loader(path):

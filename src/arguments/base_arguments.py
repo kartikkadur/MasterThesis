@@ -52,6 +52,7 @@ class Arguments():
         parser.add_argument('--init_type', type=str, default='normal', help='network initialization.')
         parser.add_argument('--init_gain', type=float, default=0.02, help='scaling factor for normal, xavier and orthogonal.')
         parser.add_argument('--no_dropout', action='store_true', help='no dropout for the generator')
+        parser.add_argument('--num_classes', type=int, default=-1, help='classification loss to be added if needed.')
         # dataset parameters
         parser.add_argument('--dataset', type=str, default='MultiClassDataset', choices=get_modules(dataset, superclass=Dataset), help='chooses how datasets are loaded.')
         parser.add_argument('--direction', type=str, default='AtoB', help='AtoB or BtoA')

@@ -177,9 +177,9 @@ class Model(torch.nn.Module, ABC):
                 scheduler.step(0)
             else:
                 scheduler.step()
-
-        lr = self.optimizer[next(iter(self.optimizer))].param_groups[0]['lr']
-        tqdm.tqdm.write('learning rate = %.7f' % lr)
+        curr_lr = str([f"{key}: {value.param_groups[0]['lr']}" \
+                        for key, value in self.optimizer.items()]).strip('[]')
+        return curr_lr
 
     def fit(self, train_data=None, validation_data=None, visualizer=None):
         """
@@ -188,8 +188,12 @@ class Model(torch.nn.Module, ABC):
         assert train_data != None, f'train_data cannot be of type None'
         # start training
         self.train()
+        # get current learning rate for displaying
+        curr_lr = str([f"{key}: {value.param_groups[0]['lr']}" \
+                        for key, value in self.optimizer.items()]).strip('[]')
+        # get steps per epoch
         steps_per_epoch = self.args.steps_per_epoch if self.args.steps_per_epoch else len(train_data)
-        #tqdm_iter = tqdm.tqdm(train_data, position=1)
+        # training loop
         for epoch in range(self.args.start_epoch, self.args.n_epochs):
             iteration = 0
             with tqdm.tqdm(total=steps_per_epoch, position=0) as discription_bar:
@@ -213,14 +217,15 @@ class Model(torch.nn.Module, ABC):
                                                                 iteration % self.args.update_html_freq == 0)
                         # increment iteration and set discription
                         iteration += 1
-                        data_bar.set_description(f"Epoch : {epoch}")
+                        data_bar.set_description(f"Epoch: {epoch}, "\
+                            f"Learning Rate: {curr_lr}")
             # do validation
             if validation_data and self.args.val_freq and epoch % self.args.val_freq == 0:
                 self.evaluate(validation_data)
             # save model
             if self.args.save_freq and epoch % self.args.save_freq == 0:
                 self.save(epoch)
-            #self.update_learning_rate()
+            curr_lr = self.update_learning_rate()
 
     def evaluate(self, val_data, num_val_step=None):
         """

@@ -10,7 +10,7 @@ from . import networks
 from . import loss
 
 
-class AttentionGANModel(Model):
+class WeatherGANModel(Model):
     """
     Implementation of AttentionGAN model
     """
@@ -30,7 +30,7 @@ class AttentionGANModel(Model):
     def __init__(self, args):
         """
         """
-        super(AttentionGANModel, self).__init__(args)
+        super(WeatherGANModel, self).__init__(args)
         # loss names
         self.print_losses = ['D_A', 'G_A', 'cycle_A', 'idt_A', 'D_B', 'G_B', 'cycle_B', 'idt_B']
         self.visuals = ['real_A', 'real_B', 'fake_A', 'fake_B', 'rec_A', 'rec_B', 'attn_real_A', 'attn_real_B', 'attn_fake_A', 'attn_fake_B']
@@ -41,6 +41,8 @@ class AttentionGANModel(Model):
         if self.isTrain:
             self.models.netD_A = networks.define_D(args)
             self.models.netD_B = networks.define_D(args)
+            if not isinstance(self.models.netD_A, networks.MultiClassNLayerDiscriminator):
+                sys.exit('Discriminator for this model should be : MultiClassNLayerDiscriminator')
 
         if self.isTrain:
             if args.lambda_identity > 0.0:  # only works when input and output images have the same number of channels
@@ -51,11 +53,12 @@ class AttentionGANModel(Model):
             self.criterion.GAN = loss.GANLoss(args.gan_mode).to(self.device)
             self.criterion.Cycle = torch.nn.L1Loss()
             self.criterion.Idt = torch.nn.L1Loss()
+            self.criterion.Class = torch.nn.CrossEntropyLoss()
             # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
             self.optimizer.G = torch.optim.Adam(itertools.chain(self.models.netG_A.parameters(), self.models.netG_B.parameters()), lr=args.lr, betas=(args.beta1, 0.999))
             self.optimizer.D = torch.optim.Adam(itertools.chain(self.models.netD_A.parameters(), self.models.netD_B.parameters()), lr=args.lr, betas=(args.beta1, 0.999))
             # compile model
-            super(AttentionGANModel, self).compile(loss_names=self.print_losses)
+            super(WeatherGANModel, self).compile(loss_names=self.print_losses)
             # zeros and ones
             self.zeros = torch.zeros((args.batch_size, 1, args.crop_size, args.crop_size))
             self.ones = torch.ones((args.batch_size, 1, args.crop_size, args.crop_size))
@@ -71,6 +74,10 @@ class AttentionGANModel(Model):
         AtoB = self.args.direction == 'AtoB'
         self.real_A = input['A' if AtoB else 'B'].to(self.device)
         self.real_B = input['B' if AtoB else 'A'].to(self.device)
+        
+        self.class_A = input['A_class' if AtoB else 'B_class'].to(self.device)
+        self.class_B = input['B_class' if AtoB else 'A_class'].to(self.device)
+        
         self.image_paths  = input['A_paths' if AtoB else 'B_paths']
 
     def forward(self):
@@ -80,7 +87,7 @@ class AttentionGANModel(Model):
         self.fake_A, self.att_real_B = self.models.netG_B(self.real_B)  # G_B(B)
         self.rec_B, self.att_rec_A = self.models.netG_A(self.fake_A)   # G_A(G_B(B))
 
-    def backward_D_basic(self, netD, real, fake):
+    def backward_D_basic(self, netD, real, fake, target):
         """Calculate GAN loss for the discriminator
         Parameters:
             netD (network)      -- the discriminator D
@@ -90,25 +97,27 @@ class AttentionGANModel(Model):
         We also call loss_D.backward() to calculate the gradients.
         """
         # Real
-        pred_real = netD(real)
+        pred_real, _ = netD(real)
         loss_D_real = self.criterion.GAN(pred_real, True)
         # Fake
-        pred_fake = netD(fake.detach())
+        pred_fake, pred_class = netD(fake.detach())
         loss_D_fake = self.criterion.GAN(pred_fake, False)
+        # classification loss
+        loss_D_class = self.criterion.Class(pred_class, target)
         # Combined loss and calculate gradients
-        loss_D = (loss_D_real + loss_D_fake) * 0.5
+        loss_D = (loss_D_real + loss_D_fake) * 0.5 + loss_D_class
         loss_D.backward()
-        return loss_D
+        return loss_D, loss_D_class
 
     def backward_D_A(self):
         """Calculate GAN loss for discriminator D_A"""
         fake_B = self.fake_B_pool.query(self.fake_B)
-        self.loss.D_A = self.backward_D_basic(self.models.netD_A, self.real_B, fake_B)
+        self.loss.D_A, self.loss.classD_A = self.backward_D_basic(self.models.netD_A, self.real_B, fake_B, self.class_B)
 
     def backward_D_B(self):
         """Calculate GAN loss for discriminator D_B"""
         fake_A = self.fake_A_pool.query(self.fake_A)
-        self.loss.D_B = self.backward_D_basic(self.models.netD_B, self.real_A, fake_A)
+        self.loss.D_B, self.loss.classD_B = self.backward_D_basic(self.models.netD_B, self.real_A, fake_A, self.class_A)
 
     def backward_G(self):
         """Calculate the loss for generators G_A and G_B"""
@@ -128,9 +137,9 @@ class AttentionGANModel(Model):
             self.loss.idt_B = 0
 
         # GAN loss D_A(G_A(A))
-        self.loss.G_A = self.criterion.GAN(self.models.netD_A(self.fake_B), True)
+        self.loss.G_A = self.criterion.GAN(self.models.netD_A(self.fake_B)[0], True)
         # GAN loss D_B(G_B(B))
-        self.loss.G_B = self.criterion.GAN(self.models.netD_B(self.fake_A), True)
+        self.loss.G_B = self.criterion.GAN(self.models.netD_B(self.fake_A)[0], True)
         # Forward cycle loss || G_B(G_A(A)) - A||
         self.loss.cycle_A = self.criterion.Cycle(self.rec_A, self.real_A) * lambda_A
         # Backward cycle loss || G_A(G_B(B)) - B||

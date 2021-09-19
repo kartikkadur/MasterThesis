@@ -31,30 +31,30 @@ def get_norm_layer(norm_type : str ='instance'):
     return norm_layer
 
 
-def get_scheduler(optimizer, opt):
+def get_scheduler(optimizer, args):
     """Return a learning rate scheduler
     Parameters:
         optimizer          : the optimizer of the network
-        opt (option class) : stores all the experiment flags; needs to be a subclass of BaseOptions．　
-                              opt.lr_policy is the name of learning rate policy: linear | step | plateau | cosine
+        args (Agumrnt class) : stores all the experiment flags; needs to be a subclass of Arguments.
+                              args.lr_policy is the name of learning rate policy: linear | step | plateau | cosine
     For 'linear', we keep the same learning rate for the first <opt.n_epochs> epochs
     and linearly decay the rate to zero over the next <opt.n_epochs_decay> epochs.
     For other schedulers (step, plateau, and cosine), we use the default PyTorch schedulers.
     See https://pytorch.org/docs/stable/optim.html for more details.
     """
-    if opt.lr_policy == 'linear':
+    if args.lr_policy == 'linear':
         def lambda_rule(epoch):
-            lr_l = 1.0 - max(0, epoch + opt.epoch_count - opt.n_epochs) / float(opt.n_epochs_decay + 1)
+            lr_l = 1.0 - max(0, epoch + args.start_epoch - args.n_epochs) / float(args.n_epochs_decay + 1)
             return lr_l
         scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda_rule)
-    elif opt.lr_policy == 'step':
-        scheduler = lr_scheduler.StepLR(optimizer, step_size=opt.lr_decay_iters, gamma=0.1)
-    elif opt.lr_policy == 'plateau':
+    elif args.lr_policy == 'step':
+        scheduler = lr_scheduler.StepLR(optimizer, step_size=args.lr_decay_iters, gamma=0.1)
+    elif args.lr_policy == 'plateau':
         scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.2, threshold=0.01, patience=5)
-    elif opt.lr_policy == 'cosine':
-        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=opt.n_epochs, eta_min=0)
+    elif args.lr_policy == 'cosine':
+        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.n_epochs, eta_min=0)
     else:
-        return NotImplementedError('learning rate policy [%s] is not implemented', opt.lr_policy)
+        return NotImplementedError('learning rate policy [%s] is not implemented', args.lr_policy)
     return scheduler
 
 
@@ -106,79 +106,52 @@ def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
     return net
 
 
-def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02, gpu_ids=[]):
-    """Create a generator
-    Parameters:
-        input_nc (int) : the number of channels in input images
-        output_nc (int) : the number of channels in output images
-        ngf (int) : the number of filters in the last conv layer
-        netG (str) : the architecture's name: resnet_9blocks | resnet_6blocks | unet_256 | unet_128
-        norm (str) : the name of normalization layers used in the network: batch | instance | none
-        use_dropout (bool) : if use dropout layers.
-        init_type (str)    : the name of our initialization method.
-        init_gain (float)  : scaling factor for normal, xavier and orthogonal.
-        gpu_ids (int list) : which GPUs the network runs on: e.g., 0,1,2
-    Returns a generator
-    Our current implementation provides two types of generators:
-        U-Net: [unet_128] (for 128x128 input images) and [unet_256] (for 256x256 input images)
-        The original U-Net paper: https://arxiv.org/abs/1505.04597
-        Resnet-based generator: [resnet_6blocks] (with 6 Resnet blocks) and [resnet_9blocks] (with 9 Resnet blocks)
-        Resnet-based generator consists of several Resnet blocks between a few downsampling/upsampling operations.
-        We adapt Torch code from Justin Johnson's neural style transfer project (https://github.com/jcjohnson/fast-neural-style).
-    The generator has been initialized by <init_net>. It uses RELU for non-linearity.
+def define_G(args):
+    """
+    Create a generator
     """
     net = None
-    norm_layer = get_norm_layer(norm_type=norm)
+    netG = args.netG.__name__
 
-    if netG == 'resnet_9blocks':
-        net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9, use_attention=True)
-    elif netG == 'resnet_6blocks':
-        net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=6, use_attention=True)
-    elif netG == 'unet_128':
-        net = UnetGenerator(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout, use_attention=True)
-    elif netG == 'unet_256':
-        net = UnetGenerator(input_nc, output_nc, 8, ngf, norm_layer=norm_layer, use_dropout=use_dropout, use_attention=True)
+    if netG == 'ResnetGenerator':
+        net = args.netG(args.input_nc,
+                                args.output_nc,
+                                args.ngf,
+                                norm_layer=args.norm_layer,
+                                use_dropout=not args.no_dropout,
+                                n_blocks=args.n_blocks_G,
+                                use_attention=True)
+    elif netG == 'UnetGenerator':
+        net = args.netG(input_nc,
+                            output_nc,
+                            num_downs=8,
+                            ngf=ngf,
+                            norm_layer=args.norm_layer,
+                            use_dropout=not args.no_dropout,
+                            use_attention=True)
     else:
-        raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
-    return init_net(net, init_type, init_gain, gpu_ids)
+        raise NotImplementedError('Generator model [%s] is not recognized' % netG)
+    return init_net(net, args.init_type, args.init_gain, args.gpu_ids)
 
 
-def define_D(input_nc, ndf, netD, n_layers_D=3, norm='batch', init_type='normal', init_gain=0.02, gpu_ids=[]):
-    """Create a discriminator
-    Parameters:
-        input_nc (int)     : the number of channels in input images
-        ndf (int)          : the number of filters in the first conv layer
-        netD (str)         : the architecture's name: basic | n_layers | pixel
-        n_layers_D (int)   : the number of conv layers in the discriminator; effective when netD=='n_layers'
-        norm (str)         : the type of normalization layers used in the network.
-        init_type (str)    : the name of the initialization method.
-        init_gain (float)  : scaling factor for normal, xavier and orthogonal.
-        gpu_ids (int list) : which GPUs the network runs on: e.g., 0,1,2
-    Returns a discriminator
-    Our current implementation provides three types of discriminators:
-        [basic]: 'PatchGAN' classifier described in the original pix2pix paper.
-        It can classify whether 70×70 overlapping patches are real or fake.
-        Such a patch-level discriminator architecture has fewer parameters
-        than a full-image discriminator and can work on arbitrarily-sized images
-        in a fully convolutional fashion.
-        [n_layers]: With this mode, you can specify the number of conv layers in the discriminator
-        with the parameter <n_layers_D> (default=3 as used in [basic] (PatchGAN).)
-        [pixel]: 1x1 PixelGAN discriminator can classify whether a pixel is real or not.
-        It encourages greater color diversity but has no effect on spatial statistics.
-    The discriminator has been initialized by <init_net>. It uses Leakly RELU for non-linearity.
+def define_D(args):
+    """
+    Create a discriminator
     """
     net = None
-    norm_layer = get_norm_layer(norm_type=norm)
-
-    if netD == 'basic':  # default PatchGAN classifier
-        net = NLayerDiscriminator(input_nc, ndf, n_layers=3, norm_layer=norm_layer)
-    elif netD == 'n_layers':  # more options
-        net = NLayerDiscriminator(input_nc, ndf, n_layers_D, norm_layer=norm_layer)
-    elif netD == 'pixel':     # classify if each pixel is real or fake
-        net = PixelDiscriminator(input_nc, ndf, norm_layer=norm_layer)
+    netD = args.netD.__name__
+    if netD == 'NLayerDiscriminator':
+        net = args.netD(args.input_nc, args.ndf, n_layers=args.n_layers_D, norm_layer=args.norm_layer)
+    elif netD == 'MultiClassNLayerDiscriminator':
+        if args.num_classes != -1:
+            net = args.netD(args.num_classes, args.input_nc, args.ndf, args.n_layers_D, norm_layer=args.norm_layer)
+        else:
+            raise ValueError(f'provide a value for num_classes argument. Current value is {args.num_classes}')
+    elif netD == 'PixelDiscriminator':     # classify if each pixel is real or fake
+        net = args.netD(args.input_nc, args.ndf, norm_layer=args.norm_layer)
     else:
         raise NotImplementedError('Discriminator model name [%s] is not recognized' % netD)
-    return init_net(net, init_type, init_gain, gpu_ids)
+    return init_net(net, args.init_type, args.init_gain, args.gpu_ids)
 
 
 def cal_gradient_penalty(netD, real_data, fake_data, device, type='mixed', constant=1.0, lambda_gp=10.0):
@@ -224,15 +197,15 @@ class ResnetGenerator(nn.Module):
     """
     Generator model for GAN
     """
-    def __init__(self, input_nc : int,
-                       output_nc : int,
-                       ngf : int = 64,
-                       n_downsampling : int = 2,
-                       n_blocks : int = 6,
-                       norm_layer : nn.Module = nn.BatchNorm2d,
-                       use_dropout : bool = False,
-                       padding_type : str = 'reflect',
-                       use_attention : bool = True) -> None:
+    def __init__(self, input_nc:int,
+                       output_nc:int,
+                       ngf:int = 64,
+                       n_downsampling:int = 2,
+                       n_blocks:int = 6,
+                       norm_layer:nn.Module = nn.BatchNorm2d,
+                       use_dropout:bool = False,
+                       padding_type:str = 'reflect',
+                       use_attention:bool = True) -> None:
         """Construct a Resnet-based generator with attention
         Parameters:
             input_nc (int)      : the number of channels in input images
@@ -308,15 +281,15 @@ class ResnetGenerator(nn.Module):
 class ResnetBlock(nn.Module):
     expansion: int = 1
     def __init__(self,
-                in_channels : int,
-                out_channels : int,
-                stride : int = 1,
-                downsample : nn.Module = None,
-                groups : int = 1,
-                base_width : int = 64,
-                norm_layer : nn.Module = None,
-                dropout : bool = False,
-                padding : str = 'zero'
+                in_channels:int,
+                out_channels:int,
+                stride:int = 1,
+                downsample:nn.Module = None,
+                groups:int = 1,
+                base_width:int = 64,
+                norm_layer:nn.Module = None,
+                dropout:bool = False,
+                padding:str = 'zero'
                 ) -> None:
         """
         Implementation of Resnet bottleneck block. Adapted from the pytorch github code.
@@ -387,13 +360,13 @@ class ResnetBlock(nn.Module):
 class UnetGenerator(nn.Module):
     """Create a Unet-based generator"""
 
-    def __init__(self, input_nc : int,
-                       output_nc : int,
-                       num_downs : int,
-                       ngf : int = 64,
-                       norm_layer : nn.Module = nn.BatchNorm2d,
-                       use_dropout : bool = False,
-                       use_attention : bool = False) -> None:
+    def __init__(self, input_nc:int,
+                       output_nc:int,
+                       num_downs:int,
+                       ngf:int = 64,
+                       norm_layer:nn.Module = nn.BatchNorm2d,
+                       use_dropout:bool = False,
+                       use_attention:bool = False) -> None:
         """
         Parameters:
             input_nc (int)  : the number of channels in input images
@@ -434,14 +407,14 @@ class UnetSkipConnectionBlock(nn.Module):
         X -------------------identity----------------------
         |-- downsampling -- |submodule| -- upsampling --|
     """
-    def __init__(self, outer_nc : int,
-                       inner_nc : int,
-                       input_nc : int = None,
-                       submodule : nn.Module = None,
-                       outermost : bool = False,
-                       innermost : bool = False,
-                       norm_layer : nn.Module = nn.BatchNorm2d,
-                       use_dropout : bool = False) -> None:
+    def __init__(self, outer_nc:int,
+                       inner_nc:int,
+                       input_nc:int = None,
+                       submodule:nn.Module = None,
+                       outermost:bool = False,
+                       innermost:bool = False,
+                       norm_layer:nn.Module = nn.BatchNorm2d,
+                       use_dropout:bool = False) -> None:
         """Construct a Unet submodule with skip connections.
         Parameters:
             outer_nc (int) : the number of filters in the outer conv layer
@@ -502,10 +475,11 @@ class UnetSkipConnectionBlock(nn.Module):
         else:   # add skip connections
             return torch.cat([x, self.model(x)], 1)
 
+
 class NLayerDiscriminator(nn.Module):
     """Defines a PatchGAN discriminator"""
 
-    def __init__(self, input_nc : int, ndf : int = 64, n_layers : int = 3, norm_layer : nn.Module = nn.BatchNorm2d):
+    def __init__(self, input_nc:int, ndf:int = 64, n_layers:int = 3, norm_layer:nn.Module = nn.BatchNorm2d):
         """Construct a PatchGAN discriminator
         Parameters:
             input_nc (int)  : the number of channels in input images
@@ -521,38 +495,64 @@ class NLayerDiscriminator(nn.Module):
 
         kw = 4
         padw = 1
-        sequence = [nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw), nn.LeakyReLU(0.2, True)]
+        self.init_block = nn.Sequential(nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw), 
+                                       nn.LeakyReLU(0.2, True))
         nf_mult = 1
         nf_mult_prev = 1
+        blocks = []
         for n in range(1, n_layers):
             nf_mult_prev = nf_mult
             nf_mult = min(2 ** n, 8)
-            sequence += [
+            blocks += [
                 nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw, bias=use_bias),
                 norm_layer(ndf * nf_mult),
                 nn.LeakyReLU(0.2, True)
             ]
+        self.downsample_blocks = nn.Sequential(*blocks)
 
         nf_mult_prev = nf_mult
         nf_mult = min(2 ** n_layers, 8)
-        sequence += [
+        self.conv_block = nn.Sequential(
             nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias),
             norm_layer(ndf * nf_mult),
             nn.LeakyReLU(0.2, True)
-        ]
-
-        sequence += [nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)]  # output 1 channel prediction map
-        self.model = nn.Sequential(*sequence)
+        )
+        # discriminator output predicting real/fake sample
+        self.output_conv = nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)
 
     def forward(self, x):
-        """Standard forward."""
-        return self.model(x)
+        x = self.init_block(x)
+        x = self.downsample_blocks(x)
+        x = self.conv_block(x)
+        return self.output_conv(x)
+
+
+class MultiClassNLayerDiscriminator(NLayerDiscriminator):
+    """Defines a multiclass discriminator"""
+    def __init__(self, num_classes:int, input_nc:int, ndf:int = 64, n_layers:int = 3, norm_layer:nn.Module = nn.BatchNorm2d):
+        """
+        Defines a classifier output which provides num_class output for calculation of classification loss
+        """
+        super(MultiClassNLayerDiscriminator, self).__init__(input_nc, ndf, n_layers, norm_layer)
+        nf_mult = min(2 ** n_layers, 8)
+        self.classifier_out = nn.Linear(ndf * nf_mult * 7 * 7, num_classes)
+
+    def forward(self, x):
+        x = self.init_block(x)
+        x = self.downsample_blocks(x)
+        x = self.conv_block(x)
+        # discriminator out
+        d_out = self.output_conv(x)
+        # classifier out
+        flatten = torch.flatten(x, 1)
+        c_out = self.classifier_out(flatten)
+        return d_out, c_out
 
 
 class PixelDiscriminator(nn.Module):
     """Defines a 1x1 PatchGAN discriminator (pixelGAN)"""
 
-    def __init__(self, input_nc : int, ndf : int = 64, norm_layer : nn.Module = nn.BatchNorm2d):
+    def __init__(self, input_nc:int, ndf:int = 64, norm_layer:nn.Module = nn.BatchNorm2d):
         """Construct a 1x1 PatchGAN discriminator
         Parameters:
             input_nc (int)  : the number of channels in input images

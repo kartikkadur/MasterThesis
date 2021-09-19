@@ -109,15 +109,26 @@ if __name__ == '__main__':
 """
 
 if __name__ == '__main__':
-    from tqdm import tqdm
-    import time
-    #pbar1 = tqdm(range(100))
-    #pbar2 = tqdm(range(100), position=0)
+    import argparse
+    from arguments.train_arguments import TrainArguments
+    from dataset.multiclass_dataset import MultiClassDataset
+    import torch
+    import torch.nn as nn
+    from model.networks import MultiClassNLayerDiscriminator
 
-    with tqdm(total=100) as pbar1:
-        for i in range(100):
-            print(i)
-            #pbar2.update(1)
-            time.sleep(1)
-            pbar1.set_description('pbar1')
-            pbar1.update(1)
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser = TrainArguments().initialize(parser)
+    parser = MultiClassDataset.modify_commandline_arguments(parser, True)
+    args = parser.parse_args(['--dataroot', r'C:\Users\Karthik\Desktop\Thesis\DATA\weather_images', '--batch_size', '1', '--netD', 'MultiClassNLayerDiscriminator'])
+    args.n_layers_D = 5
+    args.num_classes = 5
+    dataset = MultiClassDataset(args)
+    dataset = torch.utils.data.DataLoader(dataset)
+    netD = MultiClassNLayerDiscriminator(args.num_classes, args.input_nc, args.ndf, args.n_layers_D, nn.InstanceNorm2d)
+    criterion = nn.CrossEntropyLoss()
+    for i, batch in enumerate(dataset):
+        pred, class_img = netD(batch['A'])
+        print(pred, class_img)
+        loss = criterion(class_img, torch.tensor(batch['A_class']))
+        print(loss)
+        break
