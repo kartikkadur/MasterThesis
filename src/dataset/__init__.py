@@ -12,8 +12,8 @@ def create_dataset(args):
     """
     create a dataloader and returns the loader object
     """
-    data_loader = CustomDatasetDataLoader(args)
-    dataset = data_loader.load_data()
+    dataloader = CustomDatasetDataLoader(args)
+    dataset = dataloader.load_data()
     return dataset
 
 
@@ -24,8 +24,7 @@ class CustomDatasetDataLoader():
         """
         Initialize this class
         """
-        self.mode = args.mode
-        self.batch_size = args.batch_size
+        self.args = args
         self.dataset = args.dataset(args)
         print("dataset [%s] was created" % type(self.dataset).__name__)
         # create dataloader
@@ -33,20 +32,23 @@ class CustomDatasetDataLoader():
             self.dataset,
             batch_size=args.batch_size,
             shuffle=args.shuffle,
-            num_workers=args.num_workers)
-        # get the dataset size
-        self.dataset_size = min(len(self.dataset), args.max_dataset_size)
+            num_workers=args.num_workers,
+            drop_last=True)
+        # if max_dataset_size is provided calculate maximum batches
+        self.max_batches = float('inf')
+        if self.args.max_dataset_size != float('inf'):
+            self.max_batches = self.args.max_dataset_size // self.args.batch_size
 
     def load_data(self):
         return self
 
     def __len__(self):
         """Return the number of data in the dataset"""
-        return self.dataset_size
+        return min(len(self.dataloader), self.max_batches)
 
     def __iter__(self):
         """Return a batch of data"""
         for i, batch in enumerate(self.dataloader):
-            if i * self.batch_size >= self.dataset_size:
+            if i >= self.max_batches:
                 break
             yield batch

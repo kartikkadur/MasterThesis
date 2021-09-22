@@ -5,13 +5,13 @@ from utils.visualizer import Visualizer
 
 def main():
     args = TrainArguments().parse()
-    visualizer = Visualizer(args)
+    #visualizer = Visualizer(args)
     train_dataset = create_dataset(args)
     model = args.model(args)
     if args.load_checkpoint:
         model.load(args.load_checkpoint)
     if model.is_compiled:
-        model.fit(train_data=train_dataset, visualizer=visualizer)
+        model.fit(train_data=train_dataset)
 
 if __name__ == '__main__':
     main()

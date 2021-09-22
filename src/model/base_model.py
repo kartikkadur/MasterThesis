@@ -22,7 +22,7 @@ class Model(torch.nn.Module, ABC):
         self.args = args
         self.isTrain = args.isTrain
         self.gpu_ids = args.gpu_ids
-        self.device = torch.device('cuda:{}'.format(self.gpu_ids[0])) if self.gpu_ids else torch.device('cpu')
+        self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
         self.save_dir = os.path.join(args.checkpoints_dir, args.name)
         # create save directories
         os.makedirs(self.save_dir, exist_ok=True)
@@ -166,7 +166,7 @@ class Model(torch.nn.Module, ABC):
         Update learning rates for all the networks;
         """
         for scheduler in self.schedulers:
-            if self.opt.lr_policy == 'plateau':
+            if self.args.lr_policy == 'plateau':
                 scheduler.step(0)
             else:
                 scheduler.step()
@@ -188,10 +188,9 @@ class Model(torch.nn.Module, ABC):
         steps_per_epoch = self.args.steps_per_epoch if self.args.steps_per_epoch else len(train_data)
         # training loop
         for epoch in range(self.args.start_epoch, self.args.n_epochs):
-            iteration = 0
             with tqdm.tqdm(total=steps_per_epoch, position=0) as discription_bar:
                 with tqdm.tqdm(train_data, position=1) as data_bar:
-                    for batch in data_bar:
+                    for iteration, batch in enumerate(data_bar):
                         # set inputs
                         self.set_inputs(batch)
                         # do forward ,backword and update loss values in a loss meter
@@ -206,8 +205,6 @@ class Model(torch.nn.Module, ABC):
                             visualizer.display_current_results(self.get_visuals(),
                                                                 epoch,
                                                                 iteration % self.args.update_html_freq == 0)
-                        # increment iteration and set discription
-                        iteration += 1
                         data_bar.set_description(f"Epoch: {epoch}, "\
                             f"Learning Rate: {curr_lr}")
             # do validation
