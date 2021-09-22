@@ -7,7 +7,7 @@ import tqdm
 from model import networks
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from utils.tools import AverageMeter
+from utils import metrics
 from utils.tools import AttributeDict
 
 class Model(torch.nn.Module, ABC):
@@ -33,6 +33,8 @@ class Model(torch.nn.Module, ABC):
         # losses that is calculated
         self.loss = AttributeDict()
         self.val_loss = AttributeDict()
+        # metrics
+        self.metrics = metrics.Metrics()
         #lossese to print
         self.print_losses = []
         # visuals
@@ -108,11 +110,16 @@ class Model(torch.nn.Module, ABC):
         """
         if not losses:
             losses = ['loss']
-        elif not isinstance(losses, list):
-            losses = [losses]
         # initialize losses
         self.loss.add(losses)
         self.val_loss.add(losses)
+    
+    def _init_metrics(self, metrics):
+        """
+        initialize metrics that are calculated.
+        Currently supported metrics : [acc]
+        """
+        self.metrics.add(metrics)
 
     def compile(self, optimizer=None,
                       criterion=None,
@@ -139,6 +146,9 @@ class Model(torch.nn.Module, ABC):
         # assign model and loss names
         if loss_names:
             self._init_loss(loss_names)
+        # initialize metrics
+        if metrics:
+            self._init_metrics(metrics)
         # set compiled as true
         self.is_compiled = True
 
@@ -197,7 +207,10 @@ class Model(torch.nn.Module, ABC):
                         self.optimize_parameters()
                         # update discription bar
                         if iteration % self.args.print_freq == 0:
-                            discription_bar.set_description(tools.param_to_str(**self.get_losses()))
+                            message = tools.param_to_str(**self.get_losses())
+                            if self.print_metrics is not []:
+                                message += tools.param_to_str(**self.get_metrics())
+                            discription_bar.set_description(message)
                         # save visuals
                         if iteration % self.args.display_freq == 0 and visualizer:
                             visualizer.reset()
@@ -250,6 +263,16 @@ class Model(torch.nn.Module, ABC):
         for loss in self.print_losses:
             errors[loss] = loss_values[loss].avg
         return errors
+    
+    def get_metrics(self, is_train=True):
+        """
+        return metrics
+        """
+        metrics = OrderedDict()
+
+        for metric in self.metrics:
+            metrics[metric] = self.metrics[metric].acc
+        return metrics
 
     def get_visuals(self):
         """

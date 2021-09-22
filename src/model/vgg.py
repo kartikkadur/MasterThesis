@@ -23,8 +23,10 @@ class VGG(Model):
         self.criterion.loss = torch.nn.CrossEntropyLoss()
         self.optimizer.opt = torch.optim.Adam(self.models.vgg.parameters(), lr=args.lr, betas=(args.beta1, 0.999))
         self.print_losses = ['loss']
+        self.print_metrics = ['acc']
         self.visuals = []
-        super(VGG, self).compile(loss_names=self.print_losses)
+        super(VGG, self).compile(loss_names=self.print_losses,
+                                 metrics=self.print_metrics)
 
     def set_inputs(self, inputs):
         self.image = inputs['image'].to(self.device)
@@ -41,6 +43,7 @@ class VGG(Model):
             self.optimizer.opt.zero_grad()
             self.loss.loss.val.backward()
             self.optimizer.opt.step()
+        self.metrics.acc(self.pred, self.label)
     
     def load(self, checkpoint):
         ckpt_state = torch.load(checkpoint)
