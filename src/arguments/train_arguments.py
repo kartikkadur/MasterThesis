@@ -24,7 +24,6 @@ class TrainArguments(Arguments):
         parser.add_argument('--save_iter', action='store_true', help='whether saves model by iteration')
         parser.add_argument('--load_checkpoint', type=str, help='path to the model weights')
         parser.add_argument('--start_epoch', type=int, default=1, help='the starting epoch count')
-        parser.add_argument('--mode', type=str, default='train', help='train, val, test, etc')
         # training parameters
         parser.add_argument('--n_epochs', type=int, default=100, help='number of epochs with the initial learning rate')
         parser.add_argument('--n_epochs_decay', type=int, default=100, help='number of epochs to linearly decay learning rate to zero')

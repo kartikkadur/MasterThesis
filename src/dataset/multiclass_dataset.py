@@ -34,14 +34,14 @@ class MultiClassDataset(Dataset):
         else:
             dir_A = os.path.join(args.dataroot, args.mode, args.class_a)
             dir_B = os.path.join(args.dataroot, args.mode, args.class_b)
-            A_paths = sorted(make_dataset(self.dir_A, args.max_dataset_size))
-            B_paths = sorted(make_dataset(self.dir_B, args.max_dataset_size))
+            A_paths = sorted(make_dataset(dir_A, args.max_dataset_size))
+            B_paths = sorted(make_dataset(dir_B, args.max_dataset_size))
             self.classes = [args.class_a, args.class_b]
             self.paths = {args.class_a : A_paths, args.class_b : B_paths}
 
         btoA = self.args.direction == 'BtoA'
         # dataset size will be the folder containing max images
-        self.size = max(map(len, self.paths.values()))
+        self.size = sum(map(len, self.paths.values())) // args.batch_size
         # transforms
         input_nc = self.args.output_nc if btoA else self.args.input_nc
         output_nc = self.args.input_nc if btoA else self.args.output_nc

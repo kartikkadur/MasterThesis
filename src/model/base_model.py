@@ -58,23 +58,15 @@ class Model(torch.nn.Module, ABC):
         handle single forward pass on the input
         """
         pass
-
+    
+    @abstractmethod
     def optimize_parameters(self, is_train=True):
         """
-        handle backward pass and weights update.
-        Note: This is a default implementation.
-        Override this method for specific implementation of optimizing the parameters.
+        handle one backward pass and weights update.
+        The training loop is automatically handled by model.fit() function.
         """
-        if self.is_compiled:
-            self.optimizer[0].zero_grad()
-            pred = self.forward()
-            self.loss.loss = self.criterion[0](pred, self.labels)
-            if is_train:
-                self.loss.loss.val.backward()
-                self.optimizer[0].step()
-        else:
-            sys.exit('call model.compile() method before calling fit')
-    
+        pass
+
     def _init_optimizer(self, optimizer):
         """
         sets up optimizers
@@ -82,15 +74,16 @@ class Model(torch.nn.Module, ABC):
         for i, opt in enumerate(optimizer):
             if isinstance(opt, str):
                 try:
-                    self.optimizer[opt] = tools.module_to_dict(torch.optim)[opt](self.parameters())
+                    self.optimizer[opt] = tools.module_to_dict(torch.optim)[opt](self.parameters(),
+                                                                                 lr=self.args.lr)
                 except KeyError as exp:
                     tqdm.tqdm.write(f'{opt} is not a valied optimizer')
                     sys.exit(1)
             elif isinstance(opt, torch.optim.Optimizer):
                 if self.optimizer.has_key(opt.__name__):
-                    self.optimizer[f'{opt.__name__}_{i}'] = opt
+                    self.optimizer[f'{opt.__name__}_{i}'] = opt(self.parameters(), lr=self.args.lr)
                 else:
-                    self.optimizer[opt.__name__] = opt
+                    self.optimizer[opt.__name__] = opt(self.parameters(), lr=self.args.lr)
     
     def _init_criterion(self, criterion):
         """
@@ -165,8 +158,8 @@ class Model(torch.nn.Module, ABC):
         checkpoint = dict()
         for name, model in self.models.items():
             checkpoint[name] = model.state_dict()
-        torch.save(checkpoint, os.path.join(args.checkpoints_dir, f"{epoch}"))
-        tqdm.tqdm.write(f"Model saved in : {args.checkpoints_dir}")
+        torch.save(checkpoint, os.path.join(self.args.checkpoints_dir, f"{epoch}"))
+        tqdm.tqdm.write(f"Model saved in : {self.args.checkpoints_dir}")
 
     def update_learning_rate(self):
         """
@@ -199,8 +192,6 @@ class Model(torch.nn.Module, ABC):
             with tqdm.tqdm(total=steps_per_epoch, position=0) as discription_bar:
                 with tqdm.tqdm(train_data, position=1) as data_bar:
                     for batch in data_bar:
-                        if iteration == steps_per_epoch:
-                            break
                         # set inputs
                         self.set_inputs(batch)
                         # do forward ,backword and update loss values in a loss meter
@@ -227,20 +218,27 @@ class Model(torch.nn.Module, ABC):
                 self.save(epoch)
             curr_lr = self.update_learning_rate()
 
-    def evaluate(self, val_data, num_val_step=None):
+    def evaluate(self, val_data, num_val_step=None, visualizer=None):
         """
         evaluation function
         """
         self.eval()
         num_val_step = num_val_step if not num_val_step else len(val_data)
-        for iteration in tqdm(range(num_val_step)):
-            batch = val_data[iteration]
-            iteration += 1
-            # set inputs
-            self.set_inputs(batch)
-            # do one forward only
-            self.optimize_parameters(is_train=False)
-            dataset.set_description(f"Validation Loss : {tools.param_to_str(**self.get_losses(is_train=False))}")
+        with tqdm.tqdm(val_data, position=0) as data_bar:
+            iteration=0
+            for batch in data_bar:
+                iteration += 1
+                # set inputs
+                self.set_inputs(batch)
+                # do one forward only
+                self.optimize_parameters(is_train=False)
+                if visualizer:
+                    visualizer.reset()
+                    self.compute_visuals()
+                    visualizer.display_current_results(self.get_visuals(),
+                                                        iteration,
+                                                        False)
+                data_bar.set_description(f"Validation Loss : {tools.param_to_str(**self.get_losses(is_train=False))}")
     
     def get_losses(self, is_train=True):
         """

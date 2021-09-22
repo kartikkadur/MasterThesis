@@ -1,8 +1,15 @@
 import torch
-import torch.nn as nn
-from torch.nn import init
 import functools
+import torch.nn as nn
+
+from torch.nn import init
 from torch.optim import lr_scheduler
+from torchvision.models.vgg import VGG, cfgs, make_layers, model_urls
+
+try:
+    from torch.hub import load_state_dict_from_url
+except ImportError:
+    from torch.utils.model_zoo import load_url as load_state_dict_from_url
 
 
 class Identity(nn.Module):
@@ -578,3 +585,87 @@ class PixelDiscriminator(nn.Module):
     def forward(self, x):
         """Standard forward."""
         return self.model(x)
+
+
+class VGGGenerator(VGG):
+    """
+    constructs VGG net from torchvision and modifies the classification layer to output
+    num_classes classes
+    """
+    cfg = {'vgg11' : 'A',
+            'vgg13' : 'B',
+            'vgg16' : 'D',
+            'vgg19' : 'E'}
+    def __init__(self, model:str, num_classes:int = 1000, batch_norm:bool = True):
+        """
+        Parameters:
+            model : type of vgg model
+            num_classes : number of classes in the model output
+            batch_norm : bool indicating if batchnorm should be used.
+        """
+        if model not in VGGGenerator.cfg.keys():
+            raise NotImplementedError(f'Implemented model choices are : {model.keys()}')
+
+        super(VGGGenerator, self).__init__(features = make_layers(cfgs[VGGGenerator.cfg[model]], batch_norm=batch_norm),
+                                           num_classes = num_classes)
+
+
+class FeatureExtractorVGG19(VGG):
+    """
+    Constructs a VGG 19 model used as a loss network
+    """
+    def __init__(self, layer:int, checkpoint:str = None):
+        """
+        Arguments:
+            layer : the layer number from which the feature has to be returned
+        """
+        super(FeatureExtractorVGG19, self).__init__(make_layers(cfgs['E']))
+        if checkpoint:
+            state_dict = torch.load(checkpoint)
+        else:
+            state_dict = load_state_dict_from_url(model_urls['vgg19'])
+        self.load_state_dict(state_dict)
+        self.feature = self.features[:layer]
+    
+    def forward(self, x):
+        return self.feature(x)
+
+
+class FeatureExtractor(nn.Module):
+    """
+    Constructs a VGG 19 model used as a loss network
+    """
+    def __init__(self, model:nn.Module, layer_count:int, checkpoint:str = None, url:str = None):
+        """
+        Parameters:
+            model : the model from which features has to be extracted.
+            layer_count : the layer number from which the feature has to be returned
+        """
+        super(FeatureExtractor, self).__init__()
+        # load pretrained weights
+        if checkpoint:
+            state_dict = torch.load(checkpoint)
+        # load pretrained weights from a url
+        if url:
+            state_dict = load_state_dict_from_url(url)
+
+        model.load_state_dict(state_dict, strict=False)
+        self.feature = nn.Sequential(
+                        *self.unwrap_model(model)[:layer_count]
+                        )
+    
+    def unwrap_model(self, model, layers=[]):
+        """
+        unwraps the nn.Sequential layers and returns individual layers of the model.
+        """
+        for module in model.children():
+            # recursively unwrap if the module is nn.Sequential
+            if isinstance(module, nn.Sequential):
+                self.unwrap_model(module, layers)
+            # if its a child module then add to the final list
+            if list(module.children()) == []:
+                layers.append(module)
+        return layers
+    
+    def forward(self, x):
+        return self.feature(x)

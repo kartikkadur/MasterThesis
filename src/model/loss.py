@@ -1,9 +1,11 @@
 import torch
 import torch.nn as nn
 
+from model.networks import FeatureExtractorVGG19
 
 class GANLoss(nn.Module):
-    """Define different GAN objectives.
+    """
+    Define different GAN objectives.
     The GANLoss class abstracts away the need to create the target label tensor
     that has the same size as the input.
     """
@@ -63,4 +65,23 @@ class GANLoss(nn.Module):
                 loss = -prediction.mean()
             else:
                 loss = prediction.mean()
+        return loss
+
+
+class FeatureLoss(nn.Module):
+    """
+    Define feature loss.
+    This loss calculates the L2 distance between two feature maps.
+    """
+    def __init__(self, model:nn.Module, layer:int, use_l1:bool = False):
+        super(FeatureLoss, self).__init__()
+        if use_l1:
+            self.loss = nn.L1Loss()
+        else:
+            self.loss = nn.MSELoss()
+        self.model = model
+        self.vgg = FeatureExtractorVGG19(layer)
+
+    def __call__(self, prediction, target):
+        loss = self.loss(prediction, target)
         return loss

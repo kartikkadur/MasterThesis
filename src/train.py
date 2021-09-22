@@ -8,6 +8,8 @@ def main():
     visualizer = Visualizer(args)
     train_dataset = create_dataset(args)
     model = args.model(args)
+    if args.load_checkpoint:
+        model.load(args.load_checkpoint)
     if model.is_compiled:
         model.fit(train_data=train_dataset, visualizer=visualizer)
 

@@ -53,6 +53,7 @@ class Arguments():
         parser.add_argument('--init_gain', type=float, default=0.02, help='scaling factor for normal, xavier and orthogonal.')
         parser.add_argument('--no_dropout', action='store_true', help='no dropout for the generator')
         parser.add_argument('--num_classes', type=int, default=-1, help='classification loss to be added if needed.')
+        parser.add_argument('--mode', type=str, default='train', help='train, val, test, etc')
         # dataset parameters
         parser.add_argument('--dataset', type=str, default='MultiClassDataset', choices=get_modules(dataset, superclass=Dataset), help='chooses how datasets are loaded.')
         parser.add_argument('--direction', type=str, default='AtoB', help='AtoB or BtoA')
@@ -66,7 +67,7 @@ class Arguments():
         parser.add_argument('--no_flip', action='store_true', help='if specified, do not flip the images for data augmentation')
         parser.add_argument('--display_winsize', type=int, default=256, help='display window size for both visdom and HTML')
         # additional parameters
-        parser.add_argument('--epoch', type=str, default='latest', help='which epoch to load? set to latest to use latest cached model')
+        parser.add_argument('--epoch', type=str, default=None, help='which epoch to load? set to latest to use latest cached model')
         parser.add_argument('--load_iter', type=int, default='0', help='which iteration to load? if load_iter > 0, the code will load model by iter_[load_iter]; otherwise, the code will load model by [epoch]')
         parser.add_argument('--verbose', action='store_true', help='if specified, print more debugging information')
         parser.add_argument('--suffix', default='', type=str, help='customized suffix: args.name = args.name + suffix: e.g., {model}_{netG}_size{load_size}')
@@ -114,11 +115,11 @@ class Arguments():
 
         # save to the disk
         expr_dir = os.path.join(args.checkpoints_dir, args.name)
-        #os.makedirs(expr_dir, exist_ok=True)
+        os.makedirs(expr_dir, exist_ok=True)
         file_name = os.path.join(expr_dir, '{}_args.txt'.format(args.mode))
-        #with open(file_name, 'wt') as args_file:
-        #    args_file.write(message)
-        #    args_file.write('\n')
+        with open(file_name, 'wt') as args_file:
+            args_file.write(message)
+            args_file.write('\n')
 
     def parse(self):
         """Parse our arguments, create checkpoints directory suffix, and set up gpu device."""

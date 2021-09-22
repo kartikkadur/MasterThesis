@@ -156,21 +156,22 @@ class WeatherGANModel(Model):
                       self.loss.att_const_A + self.loss.att_const_B
         self.loss_G.backward()
 
-    def optimize_parameters(self):
+    def optimize_parameters(self, is_train=True):
         """Calculate losses, gradients, and update network weights; called in every training iteration"""
         # forward
         self.forward()      # compute fake images and reconstruction images.
-        # G_A and G_B
-        self.set_requires_grad([self.models.netD_A, self.models.netD_B], False)  # Ds require no gradients when optimizing Gs
-        self.optimizer.G.zero_grad()  # set G_A and G_B's gradients to zero
-        self.backward_G()             # calculate gradients for G_A and G_B
-        self.optimizer.G.step()       # update G_A and G_B's weights
-        # D_A and D_B
-        self.set_requires_grad([self.models.netD_A, self.models.netD_B], True)
-        self.optimizer.D.zero_grad()   # set D_A and D_B's gradients to zero
-        self.backward_D_A()      # calculate gradients for D_A
-        self.backward_D_B()      # calculate graidents for D_B
-        self.optimizer.D.step()  # update D_A and D_B's weights
+        if is_train:
+            # G_A and G_B
+            self.set_requires_grad([self.models.netD_A, self.models.netD_B], False)  # Ds require no gradients when optimizing Gs
+            self.optimizer.G.zero_grad()  # set G_A and G_B's gradients to zero
+            self.backward_G()             # calculate gradients for G_A and G_B
+            self.optimizer.G.step()       # update G_A and G_B's weights
+            # D_A and D_B
+            self.set_requires_grad([self.models.netD_A, self.models.netD_B], True)
+            self.optimizer.D.zero_grad()   # set D_A and D_B's gradients to zero
+            self.backward_D_A()      # calculate gradients for D_A
+            self.backward_D_B()      # calculate graidents for D_B
+            self.optimizer.D.step()  # update D_A and D_B's weights
 
     def compute_visuals(self):
         attn_real_A = mask_to_heatmap(self.att_real_A.data)

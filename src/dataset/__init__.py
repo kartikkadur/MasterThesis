@@ -4,6 +4,7 @@ import dataset
 
 from dataset.base_dataset import Dataset
 from dataset.multiclass_dataset import MultiClassDataset
+from dataset.classification_dataset import ClassificationDataset
 from utils.tools import module_to_dict
 
 
@@ -25,7 +26,6 @@ class CustomDatasetDataLoader():
         """
         self.mode = args.mode
         self.batch_size = args.batch_size
-
         self.dataset = args.dataset(args)
         print("dataset [%s] was created" % type(self.dataset).__name__)
         # create dataloader
@@ -46,7 +46,7 @@ class CustomDatasetDataLoader():
 
     def __iter__(self):
         """Return a batch of data"""
-        for i, data in enumerate(self.dataloader):
+        for i, batch in enumerate(self.dataloader):
             if i * self.batch_size >= self.dataset_size:
                 break
-            yield data
+            yield batch
