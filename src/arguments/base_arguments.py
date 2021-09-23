@@ -3,6 +3,7 @@ import os
 import torch
 import model
 import dataset
+import logging
 
 from datetime import datetime
 from model import networks
@@ -67,8 +68,8 @@ class Arguments():
         parser.add_argument('--no_flip', action='store_true', help='if specified, do not flip the images for data augmentation')
         parser.add_argument('--display_winsize', type=int, default=256, help='display window size for both visdom and HTML')
         # additional parameters
-        parser.add_argument('--epoch', type=str, default=None, help='which epoch to load? set to latest to use latest cached model')
-        parser.add_argument('--load_iter', type=int, default='0', help='which iteration to load? if load_iter > 0, the code will load model by iter_[load_iter]; otherwise, the code will load model by [epoch]')
+        parser.add_argument('--load_checkpoint', type=str, default=None, help='path to checkpoint to load')
+        parser.add_argument('--save_logs', action='store_true', help='boolean value indicating weather to save logs or not')
         parser.add_argument('--verbose', action='store_true', help='if specified, print more debugging information')
         parser.add_argument('--suffix', default='', type=str, help='customized suffix: args.name = args.name + suffix: e.g., {model}_{netG}_size{load_size}')
         self.initialized = True
@@ -111,15 +112,14 @@ class Arguments():
                 comment = '\t[default: %s]' % str(default)
             message += '{:>25}: {:<30}{}\n'.format(str(k), str(v), comment)
         message += '----------------- End -------------------'
-        print(message)
-
         # save to the disk
         expr_dir = os.path.join(args.checkpoints_dir, args.name)
         os.makedirs(expr_dir, exist_ok=True)
-        file_name = os.path.join(expr_dir, '{}_args.txt'.format(args.mode))
+        file_name = os.path.join(expr_dir, f'{args.mode}_args.txt')
         with open(file_name, 'wt') as args_file:
             args_file.write(message)
             args_file.write('\n')
+
 
     def parse(self):
         """Parse our arguments, create checkpoints directory suffix, and set up gpu device."""
@@ -149,6 +149,14 @@ class Arguments():
         args.model = module_to_dict(model)[args.model]
         args.dataset = module_to_dict(dataset)[args.dataset]
         args.norm_layer = module_to_dict(torch.nn)[args.norm_layer]
+
+        # set logging information
+        if args.save_logs:
+            log_file = os.path.join(args.checkpoints_dir, args.name, f"{args.mode}_runlogs.txt")
+            logging.basicConfig(format='%(asctime)s [%(levelname)-8s] %(message)s',
+                        handlers=[logging.FileHandler(log_file)])
+            args.logger = logging.getLogger()
+            args.logger.setLevel(logging.DEBUG)
 
         self.args = args
         return self.args

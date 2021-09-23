@@ -99,7 +99,7 @@ class Model(torch.nn.Module, ABC):
                     tqdm.tqdm.write(f"{loss} is not a valied criterion")
                     sys.exit(1)
             elif isinstance(loss, torch.nn.Module):
-                if self.criterion.has_key(opt.__name__):
+                if self.criterion.has_key(loss.__name__):
                     self.criterion[f'{loss.__name__}_{i}'] = loss
                 else:
                     self.criterion[loss.__name__] = loss
@@ -207,9 +207,7 @@ class Model(torch.nn.Module, ABC):
                         self.optimize_parameters()
                         # update discription bar
                         if iteration % self.args.print_freq == 0:
-                            message = tools.param_to_str(**self.get_losses())
-                            if self.print_metrics is not []:
-                                message += tools.param_to_str(**self.get_metrics())
+                            message = self.print_current_infos(epoch, iteration, curr_lr)
                             discription_bar.set_description(message)
                         # save visuals
                         if iteration % self.args.display_freq == 0 and visualizer:
@@ -220,13 +218,13 @@ class Model(torch.nn.Module, ABC):
                                                                 iteration % self.args.update_html_freq == 0)
                         data_bar.set_description(f"Epoch: {epoch}, "\
                             f"Learning Rate: {curr_lr}")
-            # do validation
-            if validation_data and self.args.val_freq and epoch % self.args.val_freq == 0:
-                self.evaluate(validation_data)
-            # save model
-            if self.args.save_freq and epoch % self.args.save_freq == 0:
-                self.save(epoch)
-            curr_lr = self.update_learning_rate()
+                    # do validation
+                    if validation_data and self.args.val_freq and epoch % self.args.val_freq == 0:
+                        self.evaluate(validation_data)
+                    # save model
+                    if self.args.save_freq and epoch % self.args.save_freq == 0:
+                        self.save(epoch)
+                    curr_lr = self.update_learning_rate()
 
     def evaluate(self, val_data, num_val_step=None, visualizer=None):
         """
@@ -283,6 +281,21 @@ class Model(torch.nn.Module, ABC):
             if isinstance(image, str):
                 visuals[image] = getattr(self, image)
         return visuals
+
+    def print_current_infos(self, epoch, iteration, curr_lr):
+        loss = ''
+        metrics = ''
+        if self.print_losses is not []:
+            loss = tools.param_to_str(**self.get_losses())
+        if self.print_metrics is not []:
+            metrics = tools.param_to_str(**self.get_metrics())
+        message = f'Loss: {loss} | Metrics: {metrics}'
+        # do logging if required
+        if self.args.save_logs:
+            infos = f'Epoch: {epoch}, Iteration: {iteration}, LR: {curr_lr} '\
+                    f'{message}'
+            self.args.logger.info(infos)
+        return message
 
     def compute_visuals(self):
         """

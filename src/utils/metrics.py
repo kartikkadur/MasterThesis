@@ -69,8 +69,8 @@ class Accuracy(object):
         """
         computes counter for correctly classified samples.
         """
-        self.total = len(pred)
-        self.correct = (torch.argmax(pred, dim=1) == actual).sum()
+        self.total += len(pred)
+        self.correct += (torch.argmax(pred, dim=1) == actual).sum()
         # calculate accuracy
         self.acc = self.correct / self.total
 

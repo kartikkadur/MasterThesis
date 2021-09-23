@@ -1,4 +1,5 @@
 import torch
+import os
 
 from model.networks import init_net
 from .base_model import Model

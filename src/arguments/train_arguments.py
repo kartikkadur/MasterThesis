@@ -22,7 +22,8 @@ class TrainArguments(Arguments):
         parser.add_argument('--save_latest', type=int, default=5000, help='frequency of saving the latest results comparing the iteration')
         parser.add_argument('--save_freq', type=int, default=5, help='frequency of saving checkpoints at the end of epochs')
         parser.add_argument('--save_iter', action='store_true', help='whether saves model by iteration')
-        parser.add_argument('--load_checkpoint', type=str, help='path to the model weights')
+        parser.add_argument('--load_epoch', type=int, default='0', help='which epoch to load?')
+        parser.add_argument('--load_iter', type=int, default='0', help='which iteration to load? if load_iter > 0, the code will load model by iter_[load_iter]; otherwise, the code will load model by [epoch]')
         parser.add_argument('--start_epoch', type=int, default=1, help='the starting epoch count')
         # training parameters
         parser.add_argument('--n_epochs', type=int, default=100, help='number of epochs with the initial learning rate')

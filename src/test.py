@@ -1,10 +1,10 @@
 import time
-from arguments.train_arguments import TrainArguments
+from arguments.test_arguments import TestArguments
 from dataset import create_dataset
 from utils.visualizer import Visualizer
 
 def main():
-    args = TrainArguments().parse()
+    args = TestArguments().parse()
     visualizer = Visualizer(args)
     test_dataset = create_dataset(args)
     model = args.model(args)
