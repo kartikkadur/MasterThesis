@@ -139,8 +139,9 @@ class Model(torch.nn.Module, ABC):
             criterion = [criterion] if not isinstance(criterion, list) else criterion
             self._init_criterion(criterion)
         # check if optimizer and criterion has been added
-        assert(len(self.optimizer.keys()) > 0)
-        assert(len(self.criterion.keys()) > 0)
+        if self.isTrain:
+            assert(len(self.optimizer.keys()) > 0)
+            assert(len(self.criterion.keys()) > 0)
         # inti schedulers
         self.schedulers = [networks.get_scheduler(self.optimizer[opt], self.args) for opt in self.optimizer]
         # assign model and loss names
@@ -230,24 +231,22 @@ class Model(torch.nn.Module, ABC):
         """
         evaluation function
         """
-        self.eval()
         num_val_step = num_val_step if not num_val_step else len(val_data)
         with tqdm.tqdm(val_data, position=0) as data_bar:
-            iteration=0
-            for batch in data_bar:
-                iteration += 1
-                # set inputs
-                self.set_inputs(batch)
-                # do one forward only
-                self.optimize_parameters(is_train=False)
-                if visualizer:
-                    visualizer.reset()
-                    self.compute_visuals()
-                    visualizer.display_current_results(self.get_visuals(),
-                                                        iteration,
-                                                        False)
-                data_bar.set_description(f"Validation Loss : {tools.param_to_str(**self.get_losses(is_train=False))}")
-    
+            with torch.no_grad():
+                for iteration, batch in enumerate(data_bar):
+                    # set inputs
+                    self.set_inputs(batch)
+                    # do one forward only
+                    self.optimize_parameters(is_train=False)
+                    if visualizer:
+                        visualizer.reset()
+                        self.compute_visuals()
+                        visualizer.display_current_results(self.get_visuals(),
+                                                            iteration,
+                                                            False)
+                    data_bar.set_description(f"Validation Loss : {tools.param_to_str(**self.get_losses(is_train=False))}")
+
     def get_losses(self, is_train=True):
         """
         returns a OrderedDict of losses that is being logged in a LossMeter

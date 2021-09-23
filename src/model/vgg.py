@@ -22,7 +22,8 @@ class VGG(Model):
         super(VGG, self).__init__(args)
         self.models.vgg = init_net(networks.VGGGenerator(args.vgg_type, args.num_classes, args.vgg_bn))
         self.criterion.loss = torch.nn.CrossEntropyLoss()
-        self.optimizer.opt = torch.optim.Adam(self.models.vgg.parameters(), lr=args.lr, betas=(args.beta1, 0.999))
+        if self.isTrain:
+            self.optimizer.opt = torch.optim.Adam(self.models.vgg.parameters(), lr=args.lr, betas=(args.beta1, 0.999))
         self.print_losses = ['loss']
         self.print_metrics = ['acc']
         self.visuals = []
@@ -36,11 +37,11 @@ class VGG(Model):
     def forward(self):
         self.pred = self.models.vgg(self.image)
 
-    def optimize_parameters(self):
+    def optimize_parameters(self, is_train=True):
         self.forward()
         self.loss.loss = self.criterion.loss(self.pred, self.label)
         # optimize parameters only if model is training
-        if self.isTrain:
+        if is_train:
             self.optimizer.opt.zero_grad()
             self.loss.loss.val.backward()
             self.optimizer.opt.step()
