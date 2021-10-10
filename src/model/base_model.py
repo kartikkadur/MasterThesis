@@ -30,6 +30,7 @@ class Model(torch.nn.Module, ABC):
         self.models = AttributeDict()
         self.criterion = AttributeDict()
         self.optimizer = AttributeDict()
+        self.scheduler = AttributeDict()
         # losses that is calculated
         self.loss = AttributeDict()
         self.val_loss = AttributeDict()
@@ -37,6 +38,7 @@ class Model(torch.nn.Module, ABC):
         self.metrics = metrics.Metrics()
         #lossese to print
         self.print_losses = []
+        self.print_metrics = []
         # visuals
         self.visuals = []
     
@@ -142,8 +144,9 @@ class Model(torch.nn.Module, ABC):
         if self.isTrain:
             assert(len(self.optimizer.keys()) > 0)
             assert(len(self.criterion.keys()) > 0)
-        # inti schedulers
-        self.schedulers = [networks.get_scheduler(self.optimizer[opt], self.args) for opt in self.optimizer]
+        # init schedulers
+        for opt in self.optimizer:
+            self.scheduler[opt] = networks.get_scheduler(self.optimizer[opt], self.args)
         # assign model and loss names
         if loss_names:
             self._init_loss(loss_names)
@@ -176,13 +179,13 @@ class Model(torch.nn.Module, ABC):
         """
         Update learning rates for all the networks;
         """
-        for scheduler in self.schedulers:
+        for scheduler in self.scheduler:
             if self.args.lr_policy == 'plateau':
-                scheduler.step(0)
+                self.scheduler[scheduler].step(0)
             else:
-                scheduler.step()
-        curr_lr = str([f"{key}: {value.param_groups[0]['lr']}" \
-                        for key, value in self.optimizer.items()]).strip('[]')
+                self.scheduler[scheduler].step()
+        curr_lr = str([f"{key}: {value.optimizer.param_groups[0]['lr']}" \
+                        for key, value in self.schedulers.items()]).strip('[]')
         return curr_lr
 
     def fit(self, train_data=None, validation_data=None, visualizer=None):
@@ -238,7 +241,7 @@ class Model(torch.nn.Module, ABC):
                     # set inputs
                     self.set_inputs(batch)
                     # do one forward only
-                    self.optimize_parameters(is_train=False)
+                    self.forward()
                     if visualizer:
                         visualizer.reset()
                         self.compute_visuals()
@@ -311,5 +314,13 @@ class Model(torch.nn.Module, ABC):
             if net is not None:
                 for param in net.parameters():
                     param.requires_grad = grad
+
+    def predict(self, x, a2b = True):
+        """
+        function used to predict the model output for a single input
+        Parameters:
+            x : input
+        """
+        pass
 
             

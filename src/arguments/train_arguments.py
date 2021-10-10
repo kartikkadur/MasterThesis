@@ -26,8 +26,8 @@ class TrainArguments(Arguments):
         parser.add_argument('--load_iter', type=int, default='0', help='which iteration to load? if load_iter > 0, the code will load model by iter_[load_iter]; otherwise, the code will load model by [epoch]')
         parser.add_argument('--start_epoch', type=int, default=1, help='the starting epoch count')
         # training parameters
-        parser.add_argument('--n_epochs', type=int, default=100, help='number of epochs with the initial learning rate')
-        parser.add_argument('--n_epochs_decay', type=int, default=100, help='number of epochs to linearly decay learning rate to zero')
+        parser.add_argument('--n_epochs', type=int, default=500, help='number of epochs with the initial learning rate')
+        parser.add_argument('--epoch_decay', type=int, default=250, help='epoch number to start the linear decay of learning rate to zero')
         parser.add_argument('--steps_per_epoch', type=int, default=None, help='Number of iteration to run per epoch')
         parser.add_argument('--beta1', type=float, default=0.5, help='momentum term of adam')
         parser.add_argument('--lr', type=float, default=0.0002, help='initial learning rate for adam')

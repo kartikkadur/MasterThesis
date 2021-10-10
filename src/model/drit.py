@@ -9,8 +9,7 @@ from .base_model import Model
 from . import networks
 from . import loss
 
-
-class WeatherGANModel(Model):
+class DRIT(Model):
     """
     Implementation of AttentionGAN model
     """
@@ -22,7 +21,6 @@ class WeatherGANModel(Model):
             parser.add_argument('--lambda_B', type=float, default=10.0, help='weight for cycle loss (B -> A -> B)')
             parser.add_argument('--lambda_att_A', type=float, default=1.0, help='weight for attention cycle loss (A -> B -> A)')
             parser.add_argument('--lambda_att_B', type=float, default=1.0, help='weight for attention cycle loss (B -> A -> B)')
-            parser.add_argument('--lambda_att_cycle', type=float, default=1.0, help='weight for attention cycle loss')
             parser.add_argument('--lambda_identity', type=float, default=0.5, help='use identity mapping. Setting lambda_identity other than 0 has an effect of scaling the weight of the identity mapping loss. For example, if the weight of the identity loss should be 10 times smaller than the weight of the reconstruction loss, please set lambda_identity = 0.1')
 
         return parser
@@ -30,10 +28,10 @@ class WeatherGANModel(Model):
     def __init__(self, args):
         """
         """
-        super(WeatherGANModel, self).__init__(args)
+        super(DRIT, self).__init__(args)
         # loss names
         self.print_losses = ['D_A', 'G_A', 'cycle_A', 'idt_A', 'D_B', 'G_B', 'cycle_B', 'idt_B']
-        self.visuals = ['real_A', 'real_B', 'fake_A', 'fake_B', 'rec_A', 'rec_B', 'attn_real_A', 'attn_real_B', 'attn_fake_A', 'attn_fake_B']
+        self.visuals = ['real_A', 'real_B', 'fake_A', 'fake_B', 'rec_A', 'rec_B']
         # define generators
         self.models.netG_A = networks.define_G(args)
         self.models.netG_B = networks.define_G(args)
@@ -41,8 +39,6 @@ class WeatherGANModel(Model):
         if self.isTrain:
             self.models.netD_A = networks.define_D(args)
             self.models.netD_B = networks.define_D(args)
-            if not isinstance(self.models.netD_A, networks.MultiClassNLayerDiscriminator):
-                sys.exit('Discriminator for this model should be : MultiClassNLayerDiscriminator')
 
         if self.isTrain:
             if args.lambda_identity > 0.0:  # only works when input and output images have the same number of channels
@@ -53,17 +49,12 @@ class WeatherGANModel(Model):
             self.criterion.GAN = loss.GANLoss(args.gan_mode).to(self.device)
             self.criterion.Cycle = torch.nn.L1Loss()
             self.criterion.Idt = torch.nn.L1Loss()
-            self.criterion.Class = torch.nn.CrossEntropyLoss()
+            self.criterion.Feature = torch.nn.L1Loss()
             # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
             self.optimizer.G = torch.optim.Adam(itertools.chain(self.models.netG_A.parameters(), self.models.netG_B.parameters()), lr=args.lr, betas=(args.beta1, 0.999))
             self.optimizer.D = torch.optim.Adam(itertools.chain(self.models.netD_A.parameters(), self.models.netD_B.parameters()), lr=args.lr, betas=(args.beta1, 0.999))
             # compile model
-            super(WeatherGANModel, self).compile(loss_names=self.print_losses)
-            # zeros and ones
-            self.zeros = torch.zeros((args.batch_size, 1, args.crop_size, args.crop_size))
-            self.ones = torch.ones((args.batch_size, 1, args.crop_size, args.crop_size))
-            self.att_zero = Variable(self.zeros, requires_grad=False).to(self.device)
-            self.att_ones = Variable(self.ones, requires_grad=False).to(self.device)
+            super(DRIT, self).compile(loss_names=self.print_losses)
 
     def set_inputs(self, input):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
@@ -74,20 +65,20 @@ class WeatherGANModel(Model):
         AtoB = self.args.direction == 'AtoB'
         self.real_A = input['A' if AtoB else 'B'].to(self.device)
         self.real_B = input['B' if AtoB else 'A'].to(self.device)
-        
-        self.class_A = input['A_class' if AtoB else 'B_class'].to(self.device)
-        self.class_B = input['B_class' if AtoB else 'A_class'].to(self.device)
-        
         self.image_paths  = input['A_paths' if AtoB else 'B_paths']
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
-        self.fake_B, self.att_real_A = self.models.netG_A(self.real_A)  # G_A(A)
-        self.rec_A, self.att_rec_B = self.models.netG_B(self.fake_B)   # G_B(G_A(A))
-        self.fake_A, self.att_real_B = self.models.netG_B(self.real_B)  # G_B(B)
-        self.rec_B, self.att_rec_A = self.models.netG_A(self.fake_A)   # G_A(G_B(B))
+        # get attention maps
+        _, self.att_real_A = self.models.netD_B(self.real_A)
+        _, self.att_real_B = self.models.netD_A(self.real_B)
+        # run generators
+        self.fake_B, _, self.real_feat_A = self.models.netG_A(self.att_real_A * self.real_A)  # G_A(A)
+        self.rec_A, _, self.rec_feat_A = self.models.netG_B(self.fake_B)   # G_B(G_A(A))
+        self.fake_A, _, self.real_feat_B = self.models.netG_B(self.att_real_B * self.real_B)  # G_B(B)
+        self.rec_B, _, self.rec_feat_B = self.models.netG_A(self.fake_A)  # G_A(G_B(B))
 
-    def backward_D_basic(self, netD, real, fake, target):
+    def backward_D_basic(self, netD, real, fake):
         """Calculate GAN loss for the discriminator
         Parameters:
             netD (network)      -- the discriminator D
@@ -100,24 +91,22 @@ class WeatherGANModel(Model):
         pred_real, _ = netD(real)
         loss_D_real = self.criterion.GAN(pred_real, True)
         # Fake
-        pred_fake, pred_class = netD(fake.detach())
+        pred_fake, _ = netD(fake.detach())
         loss_D_fake = self.criterion.GAN(pred_fake, False)
-        # classification loss
-        loss_D_class = self.criterion.Class(pred_class, target)
         # Combined loss and calculate gradients
-        loss_D = (loss_D_real + loss_D_fake) * 0.5 + loss_D_class
+        loss_D = (loss_D_real + loss_D_fake) * 0.5
         loss_D.backward()
-        return loss_D, loss_D_class
+        return loss_D
 
     def backward_D_A(self):
         """Calculate GAN loss for discriminator D_A"""
         fake_B = self.fake_B_pool.query(self.fake_B)
-        self.loss.D_A, self.loss.classD_A = self.backward_D_basic(self.models.netD_A, self.real_B, fake_B, self.class_B)
+        self.loss.D_A = self.backward_D_basic(self.models.netD_A, self.real_B, fake_B)
 
     def backward_D_B(self):
         """Calculate GAN loss for discriminator D_B"""
         fake_A = self.fake_A_pool.query(self.fake_A)
-        self.loss.D_B, self.loss.classD_B = self.backward_D_basic(self.models.netD_B, self.real_A, fake_A, self.class_A)
+        self.loss.D_B = self.backward_D_basic(self.models.netD_B, self.real_A, fake_A)
 
     def backward_G(self):
         """Calculate the loss for generators G_A and G_B"""
@@ -127,10 +116,10 @@ class WeatherGANModel(Model):
         # Identity loss
         if lambda_idt > 0:
             # G_A should be identity if real_B is fed: ||G_A(B) - B||
-            self.idt_A, self.idt_att_A = self.models.netG_A(self.real_B)
+            self.idt_A, _, _ = self.models.netG_A(self.real_B)
             self.loss.idt_A = self.criterion.Idt(self.idt_A, self.real_B) * lambda_B * lambda_idt
             # G_B should be identity if real_A is fed: ||G_B(A) - A||
-            self.idt_B, self.idt_att_B = self.models.netG_B(self.real_A)
+            self.idt_B, _, _ = self.models.netG_B(self.real_A)
             self.loss.idt_B = self.criterion.Idt(self.idt_B, self.real_A) * lambda_A * lambda_idt
         else:
             self.loss.idt_A = 0
@@ -144,35 +133,33 @@ class WeatherGANModel(Model):
         self.loss.cycle_A = self.criterion.Cycle(self.rec_A, self.real_A) * lambda_A
         # Backward cycle loss || G_A(G_B(B)) - B||
         self.loss.cycle_B = self.criterion.Cycle(self.rec_B, self.real_B) * lambda_B
-        # Attention Losses
-        self.loss.att_sparse_A = self.criterion.Idt(self.att_real_A, self.att_zero) * self.args.lambda_att_A
-        self.loss.att_sparse_B = self.criterion.Idt(self.att_real_B, self.att_zero) * self.args.lambda_att_B
-        self.loss.att_const_A = self.criterion.Idt(self.att_rec_A, self.att_real_B.detach()) * self.args.lambda_att_cycle
-        self.loss.att_const_B = self.criterion.Idt(self.att_rec_B, self.att_real_A.detach()) * self.args.lambda_att_cycle
-        # classification loss
+        # total
+        self.loss.cycle = (self.loss.cycle_A.val + self.loss.cycle_B.val)
+        # feature losses
+        self.loss.feature_A = self.criterion.Feature(self.real_feat_A, self.rec_feat_A)
+        self.loss.feature_B = self.criterion.Feature(self.real_feat_B, self.rec_feat_B)
+        self.loss.feature = self.loss.feature_A + self.loss.feature_B
         # combined loss and calculate gradients
-        self.loss_G = self.loss.G_A.val + self.loss.G_B.val + self.loss.cycle_A.val + \
-                      self.loss.cycle_B.val + self.loss.idt_A.val + self.loss.idt_B.val + \
-                      self.loss.att_sparse_A + self.loss.att_sparse_B + \
-                      self.loss.att_const_A + self.loss.att_const_B
+        self.loss_G = self.loss.G_A.val + self.loss.G_B.val + \
+                      self.loss.cycle + self.loss.feature + \
+                      self.loss.idt_A.val + self.loss.idt_B.val
         self.loss_G.backward()
 
-    def optimize_parameters(self, is_train=True):
+    def optimize_parameters(self):
         """Calculate losses, gradients, and update network weights; called in every training iteration"""
         # forward
         self.forward()      # compute fake images and reconstruction images.
-        if is_train:
-            # G_A and G_B
-            self.set_requires_grad([self.models.netD_A, self.models.netD_B], False)  # Ds require no gradients when optimizing Gs
-            self.optimizer.G.zero_grad()  # set G_A and G_B's gradients to zero
-            self.backward_G()             # calculate gradients for G_A and G_B
-            self.optimizer.G.step()       # update G_A and G_B's weights
-            # D_A and D_B
-            self.set_requires_grad([self.models.netD_A, self.models.netD_B], True)
-            self.optimizer.D.zero_grad()   # set D_A and D_B's gradients to zero
-            self.backward_D_A()      # calculate gradients for D_A
-            self.backward_D_B()      # calculate graidents for D_B
-            self.optimizer.D.step()  # update D_A and D_B's weights
+        # G_A and G_B
+        self.set_requires_grad([self.models.netD_A, self.models.netD_B], False)  # Ds require no gradients when optimizing Gs
+        self.optimizer.G.zero_grad()  # set G_A and G_B's gradients to zero
+        self.backward_G()             # calculate gradients for G_A and G_B
+        self.optimizer.G.step()       # update G_A and G_B's weights
+        # D_A and D_B
+        self.set_requires_grad([self.models.netD_A, self.models.netD_B], True)
+        self.optimizer.D.zero_grad()   # set D_A and D_B's gradients to zero
+        self.backward_D_A()      # calculate gradients for D_A
+        self.backward_D_B()      # calculate graidents for D_B
+        self.optimizer.D.step()  # update D_A and D_B's weights
 
     def compute_visuals(self):
         attn_real_A = mask_to_heatmap(self.att_real_A.data)

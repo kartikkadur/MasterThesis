@@ -2,7 +2,9 @@ import torch
 import functools
 import torch.nn as nn
 
+from inspect import isclass
 from torch.nn import init
+from torch.autograd import Variable
 from torch.optim import lr_scheduler
 from torchvision.models.vgg import VGG, cfgs, make_layers, model_urls
 
@@ -12,31 +14,66 @@ except ImportError:
     from torch.utils.model_zoo import load_url as load_state_dict_from_url
 
 
-class Identity(nn.Module):
-    def forward(self, x):
-        return x
-
 ########################
 ### Helper functions ###
 ########################
 
-def get_norm_layer(norm_type : str ='instance'):
+def get_norm_layer(norm_layer ='instance'):
     """Return a normalization layer
     Parameters:
-        norm_type (str) : the name of the normalization layer: batch | instance | none
-    For BatchNorm, we use learnable affine parameters and track running statistics (mean/stddev).
-    For InstanceNorm, we do not use learnable affine parameters. We do not track running statistics.
+        norm_layer (str) : the name of the normalization layer: batch | instance | none
     """
-    if norm_type == 'batch':
-        norm_layer = functools.partial(nn.BatchNorm2d, affine=True, track_running_stats=True)
-    elif norm_type == 'instance':
-        norm_layer = functools.partial(nn.InstanceNorm2d, affine=False, track_running_stats=False)
-    elif norm_type == 'none':
-        def norm_layer(x): return Identity()
-    else:
-        raise NotImplementedError('normalization layer [%s] is not found' % norm_type)
+    if isinstance(norm_layer, str):
+        if norm_layer == 'batch':
+            norm_layer = functools.partial(nn.BatchNorm2d, affine=True, track_running_stats=True)
+        elif norm_layer == 'instance':
+            norm_layer = functools.partial(nn.InstanceNorm2d, affine=False, track_running_stats=False)
+        elif norm_layer == 'layer':
+            norm_layer == functools.partial(nn.LayerNorm)
+        else:
+            raise NotImplementedError(f"norm type '{norm_layer}' is not supported at the moment")
+    elif not (norm_layer == None) and isclass(norm_layer) and not issubclass(norm_layer, nn.Module):
+        raise ValueError(f"parameter type of norm_layer should be one of 'str' or 'nn.Module' class, but got {norm_layer}.")
     return norm_layer
 
+def get_activation_layer(activation=None):
+    """
+    returns the action layer object or None (by default)
+    Parameter:
+        activation: type of activation as str or nn.Module class
+    """
+    if isinstance(activation, str):
+        if activation == 'relu':
+            activation = functools.partial(nn.ReLU, inplace=True)
+        elif activation == 'leaky_relu':
+            activation = functools.partial(nn.LeakyReLU, inplace=True)
+        elif activation == 'tanh':
+            activation = functools.partial(nn.Tanh)
+        elif activation == 'sigmoid':
+            activation == functools.partial(nn.Sigmoid)
+        else:
+            raise NotImplementedError(f"activation type '{activation}' is not supported at the moment")
+    elif not (activation == None) and isclass(activation) and not issubclass(activation, nn.Module):
+        raise ValueError(f"parameter type of activation should be one of 'str' or 'nn.Module', but got {type(activation)}.")
+    return activation
+
+def get_padding_layer(padding_type=None):
+    """
+    return the padding layer object
+    Parameters:
+        padding_type (str/nn.Module) : the type of padding. eaither str : 'reflect'/'replicate' or padding layer object
+    """
+    if isinstance(padding_type, str):
+        # set normal padding parameter to 0
+        if padding_type == 'reflect':
+            padding_layer = functools.partial(nn.ReflectionPad2d)
+        elif padding_type == 'replicate':
+            padding_layer = functools.partial(nn.ReplicationPad2d)
+        else:
+            raise NotImplementedError(f"padding type '{padding_type}' is not supported at the moment")
+    elif not (padding_type == None) and isclass(padding_type) and not issubclass(padding_type, nn.Module):
+        raise ValueError(f"parameter type of padding_type should be one of 'str' or 'nn.Module', but got {type(padding_type)}.")
+    return padding_layer
 
 def get_scheduler(optimizer, args):
     """Return a learning rate scheduler
@@ -51,7 +88,7 @@ def get_scheduler(optimizer, args):
     """
     if args.lr_policy == 'linear':
         def lambda_rule(epoch):
-            lr_l = 1.0 - max(0, epoch + args.start_epoch - args.n_epochs) / float(args.n_epochs_decay + 1)
+            lr_l = 1.0 - max(0, epoch - args.epoch_decay) / float(args.n_epochs - args.epoch_decay + 1)
             return lr_l
         scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda_rule)
     elif args.lr_policy == 'step':
@@ -108,8 +145,9 @@ def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
     """
     if torch.cuda.is_available():
         net.to('cuda')
-        #net = torch.nn.DataParallel(net, gpu_ids)  # multi-GPUs
-    init_weights(net, init_type, init_gain=init_gain)
+
+    if init_type:
+        init_weights(net, init_type, init_gain=init_gain)
     return net
 
 
@@ -122,20 +160,22 @@ def define_G(args):
 
     if netG == 'ResnetGenerator':
         net = args.netG(args.input_nc,
-                                args.output_nc,
-                                args.ngf,
-                                norm_layer=args.norm_layer,
-                                use_dropout=not args.no_dropout,
-                                n_blocks=args.n_blocks_G,
-                                use_attention=True)
-    elif netG == 'UnetGenerator':
-        net = args.netG(input_nc,
-                            output_nc,
-                            num_downs=8,
-                            ngf=ngf,
+                            args.output_nc,
+                            args.ngf,
                             norm_layer=args.norm_layer,
                             use_dropout=not args.no_dropout,
-                            use_attention=True)
+                            n_blocks=args.n_blocks_G,
+                            attention=args.attention,
+                            feature=args.feature)
+
+    elif netG == 'UnetGenerator':
+        net = args.netG(args.input_nc,
+                            args.output_nc,
+                            num_downs=8,
+                            ngf=args.ngf,
+                            norm_layer=args.norm_layer,
+                            use_dropout=not args.no_dropout,
+                            attention=True)
     else:
         raise NotImplementedError('Generator model [%s] is not recognized' % netG)
     return init_net(net, args.init_type, args.init_gain, args.gpu_ids)
@@ -156,6 +196,8 @@ def define_D(args):
             raise ValueError(f'provide a value for num_classes argument. Current value is {args.num_classes}')
     elif netD == 'PixelDiscriminator':     # classify if each pixel is real or fake
         net = args.netD(args.input_nc, args.ndf, norm_layer=args.norm_layer)
+    elif netD == 'AttNLayerDiscriminator':
+        net = args.netD(args.input_nc, args.ndf, norm_layer=args.norm_layer, n_domain=args.num_domains, input_size=args.crop_size)
     else:
         raise NotImplementedError('Discriminator model name [%s] is not recognized' % netD)
     return init_net(net, args.init_type, args.init_gain, args.gpu_ids)
@@ -196,96 +238,108 @@ def cal_gradient_penalty(netD, real_data, fake_data, device, type='mixed', const
         return 0.0, None
 
 
-#########################
-### Model definitions ###
-#########################
+####################
+### Basic Blocks ###
+####################
 
-class ResnetGenerator(nn.Module):
+class Identity(nn.Module):
+    def forward(self, x):
+        return x
+
+class Conv2dBlock(nn.Module):
     """
-    Generator model for GAN
+    Convolution block containing conv, norm layer and activation layer
     """
     def __init__(self, input_nc:int,
                        output_nc:int,
-                       ngf:int = 64,
-                       n_downsampling:int = 2,
-                       n_blocks:int = 6,
-                       norm_layer:nn.Module = nn.BatchNorm2d,
-                       use_dropout:bool = False,
-                       padding_type:str = 'reflect',
-                       use_attention:bool = True) -> None:
-        """Construct a Resnet-based generator with attention
-        Parameters:
-            input_nc (int)      : the number of channels in input images
-            output_nc (int)     : the number of channels in output images
-            ngf (int)           : the number of filters in the last conv layer
-            n_downsampling      : the number of downsampling layers to be used
-            n_blocks (int)      : the number of ResNet blocks
-            norm_layer          : normalization layer
-            use_dropout (bool)  : if use dropout layers
-            padding_type (str)  : the name of padding layer in conv layers: reflect | replicate | zero
-            attention (bool)    : weather to add attention block or not
-        """
-        super(ResnetGenerator, self).__init__()
-        assert(n_blocks >= 0)
-        self.attention = use_attention
-        if type(norm_layer) == functools.partial:
-            use_bias = norm_layer.func == nn.InstanceNorm2d
+                       kernel_size:int,
+                       stride:int = 1,
+                       padding:int = 0,
+                       output_padding:int = 0,
+                       bias:bool = False,
+                       norm_layer = None,
+                       activation = None,
+                       padding_type = None,
+                       upsample:bool = False
+                       ):
+        super(Conv2dBlock, self).__init__()
+        # empty model
+        model = []
+        # add padding layer if passed
+        if padding_type:
+            padding_layer = get_padding_layer(padding_type)
+            model += [padding_layer(padding)]
+            padding = 0
+        # add conv/deconv layers
+        if upsample:
+            model += [nn.ConvTranspose2d(input_nc, output_nc, kernel_size, stride, padding, output_padding, bias=bias)]
         else:
-            use_bias = norm_layer == nn.InstanceNorm2d
-        # initial conv block
-        init_conv_block = [nn.ReflectionPad2d(3),
-                            nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0, bias=use_bias),
-                            norm_layer(ngf),
-                            nn.ReLU(True)]
-        # downsampling blocks
-        downsample_blocks = []
-        for i in range(n_downsampling):
-            mult = 2 ** i
-            downsample_blocks += [nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1, bias=use_bias),
-                      norm_layer(ngf * mult * 2),
-                      nn.ReLU(True)]
-        # ResNet blocks
-        resnet_blocks = []
-        mult = 2 ** n_downsampling
-        for i in range(n_blocks):
-            resnet_blocks += [ResnetBlock(ngf * mult, ngf * mult, norm_layer=norm_layer, dropout=use_dropout, padding=padding_type)]
-        # upsampling blocks
-        upsample_blocks = []
-        for i in range(n_downsampling):
-            mult = 2 ** (n_downsampling - i)
-            upsample_blocks += [nn.ConvTranspose2d(ngf * mult, (ngf * mult)//2,
-                                         kernel_size=3, stride=2,
-                                         padding=1, output_padding=1,
-                                         bias=use_bias),
-                      norm_layer(int(ngf * mult / 2)),
-                      nn.ReLU(True)]
-        # final conv block
-        final_conv_block = [nn.ReflectionPad2d(3),
-                            nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0),
-                            nn.Tanh()]
-        # initialize the translator network model
-        self.translator_net = nn.Sequential(*(init_conv_block + downsample_blocks + resnet_blocks + upsample_blocks + final_conv_block))
-        # initialize attention model
-        if self.attention:
-            # final attention layer with a single channel attention mask output
-            att_final_conv_block = [nn.ReflectionPad2d(3),
-                                    nn.Conv2d(ngf, 1, kernel_size=7, padding=0),
-                                    nn.Tanh()]
-            self.attention_net = nn.Sequential(*(init_conv_block 
-                                                + downsample_blocks
-                                                + resnet_blocks[:n_blocks//2]
-                                                + upsample_blocks
-                                                + att_final_conv_block))
+            model += [nn.Conv2d(input_nc, output_nc, kernel_size, stride, padding, bias=bias)]
+        # add norm layer
+        if norm_layer:
+            norm_layer = get_norm_layer(norm_layer)
+            model += [norm_layer(output_nc)]
+        # add activation
+        if activation:
+            activation = get_activation_layer(activation)
+            activation = activation if isinstance(activation, nn.Module) else activation()
+            model += [activation]
+        # generate final block
+        self.block = nn.Sequential(*model)
 
     def forward(self, x):
-        if self.attention:
-            out = self.translator_net(x)
-            att = self.attention_net(x)
-            return att * out + (1 - att) * x, att
-        else:
-            return self.translator_net(x)
+        return self.block(x)
+
 
 class ResnetBlock(nn.Module):
+    def __init__(self,
+                channels:int,
+                norm_layer = None,
+                dropout:bool = False,
+                padding:int = 0,
+                padding_type:str = None
+                ) -> None:
+        super(ResnetBlock, self).__init__()
+        p = 0
+        self.padding = None
+        self.dropout = None
+        if padding_type:
+            self.padding = get_padding_layer(padding_type)(1)
+            padding = 0
+        elif padding == 0:
+            self.padding = nn.ReflectionPad2d(1)
+        # get norm layer
+        norm_layer = get_norm_layer(norm_layer)
+
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=padding)
+        self.norm1 = norm_layer(channels)
+        self.relu = nn.ReLU(True)
+
+        if dropout:
+            self.dropout = nn.Dropout(0.5)
+
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=padding)
+        self.norm2 = norm_layer(channels)
+
+    def forward(self, x):
+        out = x
+        # initial padding
+        if self.padding:
+            out = self.padding(out)
+
+        out = self.relu(self.norm1(self.conv1(out)))
+        # dropout
+        if self.dropout:
+            out = self.dropout(out)
+        
+        if self.padding:
+            out = self.padding(out)
+        # residual connections
+        out = x + self.norm2(self.conv2(out))
+        return out
+
+
+class ResNextBlock(nn.Module):
     expansion: int = 1
     def __init__(self,
                 in_channels:int,
@@ -309,7 +363,7 @@ class ResnetBlock(nn.Module):
         base_width   : the starting width of initial conv layer
         norm_layer   : a nn.Module class for handling normalization
         """
-        super(ResnetBlock, self).__init__()
+        super(ResNextBlock, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         self.padding = None
@@ -363,50 +417,6 @@ class ResnetBlock(nn.Module):
         out += identity
         out = self.relu(out)
         return out
-
-class UnetGenerator(nn.Module):
-    """Create a Unet-based generator"""
-
-    def __init__(self, input_nc:int,
-                       output_nc:int,
-                       num_downs:int,
-                       ngf:int = 64,
-                       norm_layer:nn.Module = nn.BatchNorm2d,
-                       use_dropout:bool = False,
-                       use_attention:bool = False) -> None:
-        """
-        Parameters:
-            input_nc (int)  : the number of channels in input images
-            output_nc (int) : the number of channels in output images
-            num_downs (int) : the number of downsamplings in UNet. For example, # if |num_downs| == 7,
-                                image of size 128x128 will become of size 1x1 # at the bottleneck
-            ngf (int)       : the number of filters in the last conv layer
-            norm_layer      : normalization layer
-        """
-        super(UnetGenerator, self).__init__()
-        # attention
-        self.attention = use_attention
-        # construct unet structure
-        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, innermost=True)
-        for i in range(num_downs - 5):          # add intermediate layers with ngf * 8 filters
-            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=use_dropout)
-        # gradually reduce the number of filters from ngf * 8 to ngf
-        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
-        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
-        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
-        self.translator_net = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True, norm_layer=norm_layer)
-        
-        if self.attention:
-            self.attention_net = UnetSkipConnectionBlock(1, ngf, input_nc=input_nc, submodule=unet_block, outermost=True, norm_layer=norm_layer)
-
-    def forward(self, x):
-        """Standard forward"""
-        if self.attention:
-            att = self.attention_net(x)
-            out = self.translator_net(x)
-            return att * out + (1 - att) * x, att
-        else:
-            return self.translator_net(x)
 
 
 class UnetSkipConnectionBlock(nn.Module):
@@ -483,16 +493,249 @@ class UnetSkipConnectionBlock(nn.Module):
             return torch.cat([x, self.model(x)], 1)
 
 
+class GaussianNoiseLayer(nn.Module):
+    def __init__(self, isTrain=False):
+        super(GaussianNoiseLayer, self).__init__()
+        self.isTrain = isTrain
+
+    def forward(self, x):
+        if self.isTrain == False:
+            return x
+        noise = Variable(torch.randn(x.size()).to(x.get_device()))
+        return x + noise
+
+
+#########################
+### Model definitions ###
+#########################
+
+class ResnetGenerator(nn.Module):
+    """
+    Generator model for GAN
+    """
+    def __init__(self, input_nc:int,
+                       output_nc:int,
+                       ngf:int = 64,
+                       n_downsampling:int = 2,
+                       n_blocks:int = 6,
+                       norm_layer:nn.Module = nn.InstanceNorm2d,
+                       use_dropout:bool = False,
+                       padding_type:str = 'reflect',
+                       attention:bool = False,
+                       feature:bool = False) -> None:
+        """Construct a Resnet-based generator with attention
+        Parameters:
+            input_nc (int)      : the number of channels in input images
+            output_nc (int)     : the number of channels in output images
+            ngf (int)           : the number of filters in the last conv layer
+            n_downsampling      : the number of downsampling layers to be used
+            n_blocks (int)      : the number of ResNet blocks
+            norm_layer          : normalization layer
+            use_dropout (bool)  : if use dropout layers
+            padding_type (str)  : the name of padding layer in conv layers: reflect | replicate | zero
+            attention (int)    : a number indicating the type of attention network to be used. 0:no attention, 1: seperate attention, 2:only decoder attention
+        """
+        super(ResnetGenerator, self).__init__()
+        assert(n_blocks >= 0)
+        self.attention = attention
+        if type(norm_layer) == functools.partial:
+            use_bias = norm_layer.func == nn.InstanceNorm2d
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d
+        
+        self.padding = nn.ReflectionPad2d(3)
+        # initial conv block
+        self.init_conv_block = Conv2dBlock(input_nc, ngf, kernel_size=7, padding=0, 
+                                            bias=use_bias, norm_layer=norm_layer,
+                                            activation='relu')
+        # downsampling blocks
+        downsample_blocks = []
+        for i in range(n_downsampling):
+            mult = 2 ** i
+            downsample_blocks += [Conv2dBlock(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, 
+                                            padding=1, bias=use_bias, norm_layer=norm_layer, activation='relu')]
+        self.downsample_blocks = nn.Sequential(*downsample_blocks)
+
+        # ResNet blocks
+        resnet_blocks = []
+        mult = 2 ** n_downsampling
+        for i in range(n_blocks):
+            resnet_blocks += [ResnetBlock(ngf * mult, norm_layer=norm_layer, dropout=use_dropout, padding_type=padding_type)]
+        self.resnet_blocks = nn.Sequential(*resnet_blocks)
+
+        # upsampling blocks
+        upsample_blocks = []
+        for i in range(n_downsampling):
+            mult = 2 ** (n_downsampling - i)
+            upsample_blocks += [Conv2dBlock(ngf * mult, (ngf * mult)//2,
+                                         kernel_size=3, stride=2,
+                                         padding=1, output_padding=1,
+                                         bias=use_bias,
+                                         norm_layer=norm_layer,
+                                         activation='relu',
+                                         upsample=True)]
+        self.upsample_blocks = nn.Sequential(*upsample_blocks)
+
+        # final conv block
+        self.final_conv_block = Conv2dBlock(ngf, output_nc, kernel_size=7, padding=0, norm_layer=None, activation='tanh')
+        
+        # initialize attention model
+        if self.attention:
+            # attention layer with a single channel attention mask output
+            self.att_resnet_blocks = nn.Sequential(*resnet_blocks[:len(resnet_blocks)//2])
+            self.attention_block = Conv2dBlock(ngf, 1, kernel_size=1, padding=0, norm_layer=None, activation='tanh')
+        
+        # return feature if required
+        self.feature = feature
+        if feature:
+            self.feature_block = nn.Sequential(*upsample_blocks[:1])
+
+    def forward(self, x):
+        # encoder
+        enc = self.init_conv_block(self.padding(x))
+        enc = self.downsample_blocks(enc)
+        enc = self.resnet_blocks(enc)
+        # decoder
+        dec = self.upsample_blocks(enc)
+        out = self.final_conv_block(self.padding(dec))
+
+        # attention
+        att = torch.ones(x.size()).to(x.get_device())
+        if self.attention == 1:
+            att = self.init_conv_block(self.padding(x))
+            att = self.downsample_blocks(att)
+            att = self.att_resnet_blocks(att)
+            att = self.upsample_blocks(att)
+            att = self.attention_block(att)
+        
+        # only decoder attention
+        if self.attention == 2:
+            att = self.upsample_blocks(enc)
+            att = self.attention_block(att)
+        
+        # return feature map of 1st layer of decoder
+        if self.feature:
+            fea = self.feature_block(enc)
+            return att * out + (1 - att) * x, att, fea
+
+        return att * out + (1 - att) * x, att
+
+
+class UnetGenerator(nn.Module):
+    """Create a Unet-based generator"""
+
+    def __init__(self, input_nc:int,
+                       output_nc:int,
+                       num_downs:int,
+                       ngf:int = 64,
+                       norm_layer:nn.Module = nn.BatchNorm2d,
+                       use_dropout:bool = False,
+                       attention:bool = False) -> None:
+        """
+        Parameters:
+            input_nc (int)  : the number of channels in input images
+            output_nc (int) : the number of channels in output images
+            num_downs (int) : the number of downsamplings in UNet. For example, # if |num_downs| == 7,
+                                image of size 128x128 will become of size 1x1 # at the bottleneck
+            ngf (int)       : the number of filters in the last conv layer
+            norm_layer      : normalization layer
+        """
+        super(UnetGenerator, self).__init__()
+        # attention
+        self.attention = attention
+        # construct unet structure
+        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, innermost=True)
+        for i in range(num_downs - 5):          # add intermediate layers with ngf * 8 filters
+            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=use_dropout)
+        # gradually reduce the number of filters from ngf * 8 to ngf
+        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
+        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
+        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
+        self.translator_net = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True, norm_layer=norm_layer)
+        
+        if self.attention:
+            self.attention_net = UnetSkipConnectionBlock(1, ngf, input_nc=input_nc, submodule=unet_block, outermost=True, norm_layer=norm_layer)
+
+    def forward(self, x):
+        """Standard forward"""
+        if self.attention:
+            att = self.attention_net(x)
+            out = self.translator_net(x)
+            return att * out + (1 - att) * x, att
+        else:
+            return self.translator_net(x)
+
+
+class ContentEncoder(nn.Module):
+    """Defines a encoder model for enconding image -> content space (DRIT)"""
+    def __init__(self, input_nc:int,
+                       ngf:int=64,
+                       num_downs:int = 3,
+                       n_blocks:int = 3,
+                       norm_layer = nn.InstanceNorm2d,
+                       use_dropout:bool = False,
+                       padding_type:str = 'reflect'):
+        super(ContentEncoder, self).__init__()
+        layers = []
+        layers += [Conv2dBlock(input_nc, ngf, kernel_size=7, stride=1, padding=3,
+                                norm_layer=norm_layer, activation='leaky_relu', padding_type='reflect')]
+        # downsample blocks
+        for i in range(num_downs):
+            mult = 2**i
+            layers += [Conv2dBlock(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1,
+                                  norm_layer=norm_layer, activation='leaky_relu', padding_type='reflect')]
+        # residual blocks
+        for i in range(n_blocks):
+            layers += [ResnetBlock(ngf, norm_layer='instance', padding=1, padding_type='reflect')]
+
+        for i in range(0, 1):
+            layers += [ResnetBlock(ngf, norm_layer='instance', padding=1, padding_type='reflect')]
+            layers += [GaussianNoiseLayer()]
+
+        self.block = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.block(x)
+
+
+class AttributeEncoder(nn.Module):
+    """Defines a encoder model for enconding image -> attribute space"""
+    def __init__(self, input_nc:int, output_nc:int, ngf:int = 64, num_downs:int = 4, content_nc:int = 3):
+        super(AttributeEncoder, self).__init__()
+        layers = [Conv2dBlock(input_nc + content_nc , ngf, 7, 1, padding=1,
+                                padding_type='reflect', activation='relu')]
+        for i in range(num_downs):
+            mult = 2**i
+            layers += [Conv2dBlock(ngf * mult , ngf * mult * 2, 4, 2, padding=1,
+                                padding_type='reflect', activation='relu')]
+        layers += [nn.AdaptiveAvgPool2d(1)]
+        layers += [nn.Conv2d(ngf*4, output_nc, 1, 1, 0)]
+        # final model
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, x, c):
+        c = c.view(c.size(0), c.size(1), 1, 1)
+        c = c.repeat(1, 1, x.size(2), x.size(3))
+        x_c = torch.cat([x, c], dim=1)
+        output = self.model(x_c)
+        return output.view(output.size(0), -1)
+
+
 class NLayerDiscriminator(nn.Module):
     """Defines a PatchGAN discriminator"""
 
-    def __init__(self, input_nc:int, ndf:int = 64, n_layers:int = 3, norm_layer:nn.Module = nn.BatchNorm2d):
+    def __init__(self, input_nc:int,
+                       ndf:int = 64,
+                       n_layers:int = 3,
+                       norm_layer:nn.Module = nn.BatchNorm2d,
+                       n_domain:int = 2):
         """Construct a PatchGAN discriminator
         Parameters:
             input_nc (int)  : the number of channels in input images
             ndf (int)       : the number of filters in the last conv layer
             n_layers (int)  : the number of conv layers in the discriminator
             norm_layer      : normalization layer
+            n_domain (int)  : Number of classes used for discrimination
         """
         super(NLayerDiscriminator, self).__init__()
         if type(norm_layer) == functools.partial:  # no need to use bias as BatchNorm2d has affine parameters
@@ -500,60 +743,110 @@ class NLayerDiscriminator(nn.Module):
         else:
             use_bias = norm_layer == nn.InstanceNorm2d
 
+        activation = nn.LeakyReLU(0.2, True)
         kw = 4
         padw = 1
-        self.init_block = nn.Sequential(nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw), 
-                                       nn.LeakyReLU(0.2, True))
+        self.init_block = Conv2dBlock(input_nc, ndf, kernel_size=kw, stride=2, padding=padw, 
+                                    norm_layer=None, activation=activation)
         nf_mult = 1
         nf_mult_prev = 1
         blocks = []
         for n in range(1, n_layers):
             nf_mult_prev = nf_mult
             nf_mult = min(2 ** n, 8)
-            blocks += [
-                nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw, bias=use_bias),
-                norm_layer(ndf * nf_mult),
-                nn.LeakyReLU(0.2, True)
-            ]
+            blocks += [Conv2dBlock(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw,
+                          bias=use_bias, norm_layer=norm_layer, activation=activation)]
+
         self.downsample_blocks = nn.Sequential(*blocks)
 
         nf_mult_prev = nf_mult
         nf_mult = min(2 ** n_layers, 8)
-        self.conv_block = nn.Sequential(
-            nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias),
-            norm_layer(ndf * nf_mult),
-            nn.LeakyReLU(0.2, True)
-        )
+        self.conv_block = Conv2dBlock(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw,
+                                    bias=use_bias, norm_layer=norm_layer, activation=activation)
         # discriminator output predicting real/fake sample
-        self.output_conv = nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)
-
-    def forward(self, x):
-        x = self.init_block(x)
-        x = self.downsample_blocks(x)
-        x = self.conv_block(x)
-        return self.output_conv(x)
-
-
-class MultiClassNLayerDiscriminator(NLayerDiscriminator):
-    """Defines a multiclass discriminator"""
-    def __init__(self, num_classes:int, input_nc:int, ndf:int = 64, n_layers:int = 3, norm_layer:nn.Module = nn.BatchNorm2d):
-        """
-        Defines a classifier output which provides num_class output for calculation of classification loss
-        """
-        super(MultiClassNLayerDiscriminator, self).__init__(input_nc, ndf, n_layers, norm_layer)
-        nf_mult = min(2 ** n_layers, 8)
-        self.classifier_out = nn.Linear(ndf * nf_mult * 7 * 7, num_classes)
+        self.out_conv = nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)
+        # classification output
+        self.n_domains = n_domain
+        if self.n_domains > 2:
+            self.out_cls = nn.Conv2d(ndf * nf_mult, self.n_domains, kernel_size=kw, stride=1, padding=padw)
+            self.pool = nn.AdaptiveAvgPool2d(1)
 
     def forward(self, x):
         x = self.init_block(x)
         x = self.downsample_blocks(x)
         x = self.conv_block(x)
         # discriminator out
-        d_out = self.output_conv(x)
-        # classifier out
-        flatten = torch.flatten(x, 1)
-        c_out = self.classifier_out(flatten)
-        return d_out, c_out
+        d_out = self.out_conv(x)
+        # classification out
+        if self.n_domains > 2:
+            c_out = self.pool(self.out_cls(x))
+            return d_out, c_out.view(c_out.size(0), c_out.size(1))
+        return d_out
+
+class AttNLayerDiscriminator(nn.Module):
+    """Defines a PatchGAN discriminator with attention"""
+
+    def __init__(self, input_nc:int,
+                       ndf:int = 64,
+                       n_layers:int = 3,
+                       norm_layer:nn.Module = nn.BatchNorm2d,
+                       n_domain:int = 2,
+                       input_size:int=256):
+        """Construct a PatchGAN discriminator
+        Parameters:
+            input_nc (int)  : the number of channels in input images
+            ndf (int)       : the number of filters in the last conv layer
+            n_layers (int)  : the number of conv layers in the discriminator
+            norm_layer      : normalization layer
+            input_size      : the input image size
+        """
+        super(AttNLayerDiscriminator, self).__init__()
+        if type(norm_layer) == functools.partial:  # no need to use bias as BatchNorm2d has affine parameters
+            use_bias = norm_layer.func == nn.InstanceNorm2d
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d
+        
+        activation = nn.LeakyReLU(0.2, True)
+        kw = 4
+        padw = 1
+        self.init_block = Conv2dBlock(input_nc, ndf, kernel_size=kw, stride=2, padding=padw, 
+                                       norm_layer=None, activation=activation)
+        nf_mult = 1
+        nf_mult_prev = 1
+        blocks = []
+        for n in range(1, n_layers):
+            nf_mult_prev = nf_mult
+            nf_mult = min(2 ** n, 8)
+            blocks += [Conv2dBlock(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw,
+                                 bias=use_bias, norm_layer=norm_layer, activation=activation)]
+
+        self.downsample_blocks = nn.Sequential(*blocks)
+        # upsample block to get attention map
+        self.upsample_block = nn.Upsample(input_size, mode='bilinear')
+
+        nf_mult_prev = nf_mult
+        nf_mult = min(2 ** n_layers, 8)
+        self.conv_block = Conv2dBlock(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw,
+                                    bias=use_bias, norm_layer=norm_layer, activation=activation)
+        # discriminator output predicting real/fake sample
+        self.out_conv = nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)
+        # classification output
+        self.n_domains = n_domain
+        if self.n_domains > 2:
+            self.out_cls = nn.Conv2d(ndf * nf_mult, self.n_domains, kernel_size=kw, stride=1, padding=padw)
+            self.pool = nn.AdaptiveAvgPool2d(1)
+
+    def forward(self, x):
+        x = self.init_block(x)
+        x = self.downsample_blocks(x)
+        # calculate attention maps
+        att = torch.mean(self.upsample_block(x), dim=1)
+        x = self.conv_block(x)
+        d_out = self.out_conv(x)
+        if self.n_domains > 2:
+            c_out = self.pool(self.out_cls(x))
+            return d_out, att, c_out.view(c_out.size(0), c_out.size(1))
+        return d_out, att
 
 
 class PixelDiscriminator(nn.Module):
@@ -573,11 +866,10 @@ class PixelDiscriminator(nn.Module):
             use_bias = norm_layer == nn.InstanceNorm2d
 
         self.model = [
-            nn.Conv2d(input_nc, ndf, kernel_size=1, stride=1, padding=0),
-            nn.LeakyReLU(0.2, True),
-            nn.Conv2d(ndf, ndf * 2, kernel_size=1, stride=1, padding=0, bias=use_bias),
-            norm_layer(ndf * 2),
-            nn.LeakyReLU(0.2, True),
+            Conv2dBlock(input_nc, ndf, kernel_size=1, stride=1, padding=0, 
+                      norm_layer=None, activation='leaky_relu'),
+            Conv2dBlock(ndf, ndf * 2, kernel_size=1, stride=1, padding=0, bias=use_bias,
+                      norm_layer=norm_layer, activation='leaky_relu'),
             nn.Conv2d(ndf * 2, 1, kernel_size=1, stride=1, padding=0, bias=use_bias)]
 
         self.model = nn.Sequential(*self.model)
@@ -596,7 +888,7 @@ class VGGGenerator(VGG):
             'vgg13' : 'B',
             'vgg16' : 'D',
             'vgg19' : 'E'}
-    def __init__(self, model:str, num_classes:int = 1000, batch_norm:bool = True):
+    def __init__(self, model:str, num_classes:int = 1000, checkpoint=None, batch_norm:bool = True):
         """
         Parameters:
             model : type of vgg model
@@ -608,27 +900,9 @@ class VGGGenerator(VGG):
 
         super(VGGGenerator, self).__init__(features = make_layers(cfgs[VGGGenerator.cfg[model]], batch_norm=batch_norm),
                                            num_classes = num_classes)
-
-
-class FeatureExtractorVGG19(VGG):
-    """
-    Constructs a VGG 19 model used as a loss network
-    """
-    def __init__(self, layer:int, checkpoint:str = None):
-        """
-        Arguments:
-            layer : the layer number from which the feature has to be returned
-        """
-        super(FeatureExtractorVGG19, self).__init__(make_layers(cfgs['E']))
+        
         if checkpoint:
-            state_dict = torch.load(checkpoint)
-        else:
-            state_dict = load_state_dict_from_url(model_urls['vgg19'])
-        self.load_state_dict(state_dict)
-        self.feature = self.features[:layer]
-    
-    def forward(self, x):
-        return self.feature(x)
+            self.load_state_dict(torch.load(checkpoint), strict=False)
 
 
 class FeatureExtractor(nn.Module):
@@ -642,18 +916,12 @@ class FeatureExtractor(nn.Module):
             layer_count : the layer number from which the feature has to be returned
         """
         super(FeatureExtractor, self).__init__()
-        # load pretrained weights
         if checkpoint:
-            state_dict = torch.load(checkpoint)
-        # load pretrained weights from a url
-        if url:
-            state_dict = load_state_dict_from_url(url)
-
-        model.load_state_dict(state_dict, strict=False)
+            model.load_state_dict(torch.load(checkpoint))
         self.feature = nn.Sequential(
                         *self.unwrap_model(model)[:layer_count]
                         )
-    
+
     def unwrap_model(self, model, layers=[]):
         """
         unwraps the nn.Sequential layers and returns individual layers of the model.

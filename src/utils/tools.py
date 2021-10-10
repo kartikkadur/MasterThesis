@@ -33,9 +33,15 @@ def tensor_to_image(tensor, imtype=np.uint8):
     converts a torch tensor to a numpy image
     """
     if isinstance(tensor, torch.Tensor):
-        image_numpy = tensor.squeeze().data.cpu().float().numpy()
+        if tensor.dim() == 4:
+            image_numpy = tensor[0,:,:,:].data.cpu().float().numpy()
+        else:
+            image_numpy = tensor.data.cpu().float().numpy()
     else:
-        image_numpy = tensor
+        if len(tensor.shape) == 4:
+            image_numpy = tensor[0,:,:,:]
+        else:
+            image_numpy = tensor
     if image_numpy.shape[0] == 1:
         image_numpy = np.tile(image_numpy, (3, 1, 1))
     image_numpy = (np.transpose(image_numpy, (1, 2, 0)) + 1) / 2.0 * 255.0

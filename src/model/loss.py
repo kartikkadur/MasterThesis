@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 
-from model.networks import FeatureExtractorVGG19
+from model.networks import FeatureExtractor, VGGGenerator, init_net
+
 
 class GANLoss(nn.Module):
     """
@@ -68,20 +69,62 @@ class GANLoss(nn.Module):
         return loss
 
 
-class FeatureLoss(nn.Module):
+class PerceptualLoss(nn.Module):
     """
-    Define feature loss.
-    This loss calculates the L2 distance between two feature maps.
+    Constructs a VGG 19 model used as a loss network
     """
-    def __init__(self, model:nn.Module, layer:int, use_l1:bool = False):
-        super(FeatureLoss, self).__init__()
+    def __init__(self, model:str, layers:int, use_l1:bool = False, checkpoint:str = None, url:str = None):
+        """
+        Parameters:
+            model : the vgg model used for calculating feature loss, options : [vgg13, vgg16, vgg19]
+            layes : the layer number from which the feature is extracted.
+            checkpoint : pretrained checkpoint of model
+            url : checkpoint url to download and load.
+        """
+        super(PerceptualLoss, self).__init__()
+        with torch.no_grad():
+            model = VGGGenerator(model, checkpoint=checkpoint, batch_norm=True)
+            model = self.unwrap_model(model)
+            blocks = []
+            for layer in layers:
+                block = init_net(nn.Sequential(*model[:layer]), init_type=None)
+                blocks.append(block)
+
+        # extracted blocks
+        self.blocks = blocks
+
+        # define loss type
         if use_l1:
             self.loss = nn.L1Loss()
         else:
             self.loss = nn.MSELoss()
-        self.model = model
-        self.vgg = FeatureExtractorVGG19(layer)
 
-    def __call__(self, prediction, target):
-        loss = self.loss(prediction, target)
+    def unwrap_model(self, model, layers=[]):
+        """
+        unwraps the nn.Sequential layers and returns individual layers of the model.
+        Parameters:
+            model : the model to be unwraped
+            layers : always an empty list
+        """
+        for module in model.children():
+            # recursively unwrap if the module is nn.Sequential
+            if isinstance(module, nn.Sequential):
+                self.unwrap_model(module, layers)
+            # if its a child module then add to the final list
+            if list(module.children()) == []:
+                layers.append(module)
+        return layers
+    
+    def __call__(self, x, y):
+        """
+        Parameters:
+            x : input tensor
+            y : target tensor
+        """
+        loss = 0.0
+        for block in self.blocks:
+            x_out = block(x)
+            y_out = block(y)
+            loss += self.loss(x_out ,y_out)
         return loss
+        

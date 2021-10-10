@@ -7,11 +7,10 @@ import logging
 
 from datetime import datetime
 from model import networks
-from inspect import isclass
 from dataset.base_dataset import Dataset
 from model.base_model import Model
 from utils.tools import module_to_dict
-
+from inspect import isclass
 
 def get_modules(module, superclass=None, filter=None):
     if superclass:
@@ -53,7 +52,7 @@ class Arguments():
         parser.add_argument('--init_type', type=str, default='normal', help='network initialization.')
         parser.add_argument('--init_gain', type=float, default=0.02, help='scaling factor for normal, xavier and orthogonal.')
         parser.add_argument('--no_dropout', action='store_true', help='no dropout for the generator')
-        parser.add_argument('--num_classes', type=int, default=-1, help='classification loss to be added if needed.')
+        parser.add_argument('--num_domains', type=int, default=2, help='number of domains in the dataset')
         parser.add_argument('--mode', type=str, default='train', help='train, val, test, etc')
         # dataset parameters
         parser.add_argument('--dataset', type=str, default='MultiClassDataset', choices=get_modules(dataset, superclass=Dataset), help='chooses how datasets are loaded.')
@@ -68,6 +67,8 @@ class Arguments():
         parser.add_argument('--no_flip', action='store_true', help='if specified, do not flip the images for data augmentation')
         parser.add_argument('--display_winsize', type=int, default=256, help='display window size for both visdom and HTML')
         # additional parameters
+        parser.add_argument('--attention', type=int, default=0, help='attention type to be incorporated. 0: No attention, 1: Seperate attention network, 2:Decoder attention')
+        parser.add_argument('--feature', action='store_true', help='feature loss calculation for SPAGAN model')
         parser.add_argument('--load_checkpoint', type=str, default=None, help='path to checkpoint to load')
         parser.add_argument('--save_logs', action='store_true', help='boolean value indicating weather to save logs or not')
         parser.add_argument('--verbose', action='store_true', help='if specified, print more debugging information')
