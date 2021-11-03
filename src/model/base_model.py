@@ -113,8 +113,8 @@ class Model(torch.nn.Module, ABC):
         if not losses:
             losses = ['loss']
         # initialize losses
-        self.loss.add(losses)
-        self.val_loss.add(losses)
+        for loss in losses:
+            self.loss[loss] = 0
     
     def _init_metrics(self, metrics):
         """
@@ -123,9 +123,18 @@ class Model(torch.nn.Module, ABC):
         """
         self.metrics.add(metrics)
 
+    def _zero_grad(self, optimizer=None):
+        """
+        set optimizer gradients to 0
+        """
+        if optimizer:
+            optimizer.zero_grad()
+        else:
+            for opt in self.optimizer:
+                self.optimizer[opt].zero_grad()
+
     def compile(self, optimizer=None,
                       criterion=None,
-                      loss_names = None,
                       metrics=None,
                       loss_weights=None,
                       weighted_metrics=None):
@@ -148,8 +157,8 @@ class Model(torch.nn.Module, ABC):
         for opt in self.optimizer:
             self.scheduler[opt] = networks.get_scheduler(self.optimizer[opt], self.args)
         # assign model and loss names
-        if loss_names:
-            self._init_loss(loss_names)
+        if self.print_losses != []:
+            self._init_loss(self.print_losses)
         # initialize metrics
         if metrics:
             self._init_metrics(metrics)
@@ -185,7 +194,7 @@ class Model(torch.nn.Module, ABC):
             else:
                 self.scheduler[scheduler].step()
         curr_lr = str([f"{key}: {value.optimizer.param_groups[0]['lr']}" \
-                        for key, value in self.schedulers.items()]).strip('[]')
+                        for key, value in self.scheduler.items()]).strip('[]')
         return curr_lr
 
     def fit(self, train_data=None, validation_data=None, visualizer=None):
@@ -205,10 +214,12 @@ class Model(torch.nn.Module, ABC):
             with tqdm.tqdm(total=steps_per_epoch, position=0) as discription_bar:
                 with tqdm.tqdm(train_data, position=1) as data_bar:
                     for iteration, batch in enumerate(data_bar):
+                        if iteration == steps_per_epoch:
+                            break
                         # set inputs
                         self.set_inputs(batch)
                         # do forward ,backword and update loss values in a loss meter
-                        self.optimize_parameters()
+                        self.optimize_parameters(iteration)
                         # update discription bar
                         if iteration % self.args.print_freq == 0:
                             message = self.print_current_infos(epoch, iteration, curr_lr)
@@ -261,7 +272,7 @@ class Model(torch.nn.Module, ABC):
             loss_values = self.val_loss
 
         for loss in self.print_losses:
-            errors[loss] = loss_values[loss].avg
+            errors[loss] = loss_values[loss]
         return errors
     
     def get_metrics(self, is_train=True):
@@ -305,11 +316,10 @@ class Model(torch.nn.Module, ABC):
         """
         pass
 
-    def set_requires_grad(self, models, grad=False):
+    def set_requires_grad(self, *models, grad=False):
         """
         sets the gradient parameter
         """
-        models = models if isinstance(models, list) else [models]
         for net in models:
             if net is not None:
                 for param in net.parameters():

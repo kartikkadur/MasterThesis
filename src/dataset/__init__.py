@@ -1,12 +1,12 @@
 import importlib
 import torch.utils.data
 import dataset
+import os.path
 
 from dataset.base_dataset import Dataset
-from dataset.multiclass_dataset import MultiClassDataset
-from dataset.classification_dataset import ClassificationDataset
-from utils.tools import module_to_dict
+from PIL import Image
 
+IMG_EXTENSIONS = ['.jpg', '.JPG', '.jpeg', '.JPEG', '.png', '.PNG', '.ppm', '.PPM', '.bmp', '.BMP']
 
 def create_dataset(args):
     """
@@ -16,6 +16,49 @@ def create_dataset(args):
     dataset = dataloader.load_data()
     return dataset
 
+def is_image_file(filename):
+    return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
+
+
+def make_image_dataset(path, max_dataset_size=float("inf")):
+    assert os.path.isdir(path), '%s is not a valid directory' % path
+    labels = sorted(os.listdir(path))
+    images = [
+                (os.path.join(fdir, fname), labels.index(os.path.basename(fdir)))
+                for fdir, _, fnames in sorted(os.walk(path))
+                for fname in fnames if is_image_file(fname)
+            ]
+    return images[:min(max_dataset_size, len(images))]
+
+
+def make_image_dataset_dict(path, max_dataset_size=float('inf')):
+    assert os.path.isdir(path), '%s is not a valid directory' % path
+
+    images = {}
+    for fdir, _, fnames in sorted(os.walk(path)):
+        if not fdir.startswith('.'):
+            for fname in fnames:
+                img_file = os.path.join(fdir, fname)
+                if is_image_file(img_file):
+                    if os.path.basename(fdir) in images.keys():
+                        images[os.path.basename(fdir)] += [img_file]
+                    else:
+                        images[os.path.basename(fdir)] = [img_file]
+    return images
+
+def default_loader(path):
+    return Image.open(path).convert('RGB')
+
+############################
+### dataset class imports###
+############################
+
+from dataset.multiclass_dataset import SingleDataset, AlignedDataset, ReferenceDataset
+from dataset.classification_dataset import ClassificationDataset
+
+#########################
+### Custom dataloaders ###
+#########################
 
 class CustomDatasetDataLoader():
     """Wrapper class of Dataset class that performs multi-threaded data loading"""

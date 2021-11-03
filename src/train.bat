@@ -1,1 +1,0 @@
-python .\train.py --dataroot C:\Users\Karthik\Desktop\Thesis\DATA\weather_images --batch_size 1 --netD AttNLayerDiscriminator --netG ResnetGenerator --n_blocks_G 6 --n_layers_D 3 --model SPAGAN --save_logs --class_a sun --class_b snow --start_epoch 0 --feature --num_domains 5

@@ -35,6 +35,7 @@ class TrainArguments(Arguments):
         parser.add_argument('--pool_size', type=int, default=50, help='the size of image buffer that stores previously generated images')
         parser.add_argument('--lr_policy', type=str, default='linear', help='learning rate policy. [linear | step | plateau | cosine]')
         parser.add_argument('--lr_decay_iters', type=int, default=50, help='multiply by a gamma every lr-decay-iters iterations')
+        parser.add_argument('--weight_decay', type=float, default=1e-4, help='weight decay for optimizer')
         # validation parameters
         parser.add_argument('--num_val_steps', type=int, default=None, help='number of validation steps to be done.')
         parser.add_argument('--val_freq', type=int, default=None, help='number indicating the frequency of running validation')

@@ -69,9 +69,8 @@ class AGGAN(Model):
         The option 'direction' can be used to swap domain A and domain B.
         """
         AtoB = self.args.direction == 'AtoB'
-        self.real_A = input['A' if AtoB else 'B'].to(self.device)
-        self.real_B = input['B' if AtoB else 'A'].to(self.device)
-        self.image_paths  = input['A_paths' if AtoB else 'B_paths']
+        self.real_A = input['x1' if AtoB else 'x2'].to(self.device)
+        self.real_B = input['x2' if AtoB else 'x1'].to(self.device)
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""

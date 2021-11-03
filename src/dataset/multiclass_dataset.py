@@ -1,15 +1,59 @@
 import os.path
+import torch
+
+from numpy import random
 from dataset.base_dataset import Dataset, get_transform
-from dataset.image_folder import make_dataset
-from dataset.image_folder import make_dataset_dict
+from dataset import is_image_file
 from PIL import Image
-import random
 
 
-class MultiClassDataset(Dataset):
+class SingleDataset(Dataset):
+    """Returns a single domain image and label"""
+    @staticmethod
+    def modify_commandline_arguments(parser, is_train):
+        return parser
+
+    def __init__(self, args, return_paths=False):
+        super(SingleDataset, self).__init__(args)
+        self.root = os.path.join(args.dataroot, args.mode)
+        self.dataset, self.targets, self.target_names = self._make_dataset(self.root)
+        self.num_domains = len(self.targets)
+        self.transform = get_transform(self.args, grayscale=(args.input_nc == 1))
+        self.return_paths = return_paths
+        self.size = max(map(len, self.dataset.values()))
+
+    def _make_dataset(self, root):
+        domains = os.listdir(root)
+        dataset = {}
+        for i, domain in enumerate(sorted(domains)):
+            domain_dir = os.path.join(root, domain)
+            fnames = [os.path.join(domain_dir,f) for f in os.listdir(domain_dir) if is_image_file(f)]
+            dataset[i] = fnames
+        return dataset, sorted(dataset.keys()), domains
+
+    def __len__(self):
+        return self.size
+
+    def __getitem__(self, index):
+        # sample a random class
+        y_src = random.choice(self.targets)
+        # generate one-hot label
+        y = torch.zeros((self.num_domains,))
+        y[y_src] = 1
+        # get image
+        x_src = self.dataset[y_src][index % len(self.dataset[y_src])]
+        x = Image.open(x_src).convert('RGB')
+        if self.transform is not None:
+            x = self.transform(x)
+        if self.return_paths:
+            return {'x':x, 'y':y, 'x_path':x_src}
+        return {'x':x, 'y':y}
+
+
+class AlignedDataset(SingleDataset):
     """
-    This dataset class can load data from multiple folders/classes.
-    It returns two classes passed as command line arguments --class_a and --class_b.
+    This dataset returns images from two domains. The domains are selected at
+    random if the arguments class_a and class_b are not passed
     """
     @staticmethod
     def modify_commandline_arguments(parser, is_train):
@@ -17,76 +61,77 @@ class MultiClassDataset(Dataset):
         parser.add_argument('--class_b', type=str, default=None, help='name of the directory containing class B images')
         return parser
 
-    def __init__(self, args):
-        """Initialize this dataset class.
-        Parameters:
-            args (Arguments class) -- stores all the experiment flags; needs to be a subclass of Arguments
-        """
-        Dataset.__init__(self, args)
-        # variable indicating weather to select random class or not
-        self.random = False
-        # read the paths
-        if args.class_a is None or args.class_b is None:
-            path = os.path.join(args.dataroot, args.mode)
-            self.classes = [c for c in os.listdir(path) if not c.startswith('.')]
-            self.paths = make_dataset_dict(path)
-            self.random = True
-        else:
-            dir_A = os.path.join(args.dataroot, args.mode, args.class_a)
-            dir_B = os.path.join(args.dataroot, args.mode, args.class_b)
-            A_paths = sorted(make_dataset(dir_A, args.max_dataset_size))
-            B_paths = sorted(make_dataset(dir_B, args.max_dataset_size))
-            self.classes = [args.class_a, args.class_b]
-            self.paths = {args.class_a : A_paths, args.class_b : B_paths}
-
-        btoA = self.args.direction == 'BtoA'
-        # dataset size will be the folder containing max images
-        self.size = sum(map(len, self.paths.values())) // args.batch_size
-        # transforms
-        input_nc = self.args.output_nc if btoA else self.args.input_nc
-        output_nc = self.args.input_nc if btoA else self.args.output_nc
-        self.transform_A = get_transform(self.args, grayscale=(input_nc == 1))
-        self.transform_B = get_transform(self.args, grayscale=(output_nc == 1))
+    def __init__(self, args, return_paths=False):
+        super(AlignedDataset, self).__init__(args, return_paths)
+        if self.args.class_a and self.args.class_b:
+            self.targets = sorted([self.target_names.index(self.args.class_a),
+                            self.target_names.index(self.args.class_b)])
 
     def __getitem__(self, index):
-        """Return a data point and its metadata information.
-        Parameters:
-            index (int)      -- a random integer for data indexing
-        Returns a dictionary that contains A, B, A_paths and B_paths
-            A (tensor)       -- an image in the input domain
-            B (tensor)       -- its corresponding image in the target domain
-            A_class (str)    -- class A name
-            B_class (str)    -- class B name
-            A_paths (str)    -- image paths
-            B_paths (str)    -- image paths
-        """
-        if self.random:
-            classes = list(self.paths.keys())
-            A_class = random.choice(classes)
-            B_class = random.choice([c for c in classes if c != A_class])
-            # get paths
-            A_path = self.paths[A_class][index % len(self.paths[A_class])]
-            B_path = self.paths[B_class][index % len(self.paths[B_class])]
+        # sample a random class
+        if len(self.targets) == 2:
+            y1_src, y2_src = self.targets[0], self.targets[1]
         else:
-            A_class = self.classes[0]
-            B_class = self.classes[1]
-            A_path = self.paths[A_class][index % len(self.paths[A_class])]
-            if not self.args.shuffle:
-                index_B = index % len(self.paths[B_class])
-            else:
-                index_B = random.randint(0, len(self.paths[B_class]) - 1)
-            B_path = self.paths[B_class][index_B]
-        # read images
-        A_img = Image.open(A_path).convert('RGB')
-        B_img = Image.open(B_path).convert('RGB')
-        # apply image transformation
-        A = self.transform_A(A_img)
-        B = self.transform_B(B_img)
+            y1_src, y2_src = random.choice(self.targets, 2, replace=False)
+        # generate one-hot label
+        y1 = torch.zeros((self.num_domains,))
+        y2 = torch.zeros((self.num_domains,))
+        y1[y1_src] = 1
+        y2[y2_src] = 1
+        # get image
+        x1_src = self.dataset[y1_src][index % len(self.dataset[y1_src])]
+        x2_src = self.dataset[y2_src][index % len(self.dataset[y2_src])]
+        x1 = Image.open(x1_src).convert('RGB')
+        x2 = Image.open(x2_src).convert('RGB')
+        if self.transform is not None:
+            x1 = self.transform(x1)
+            x2 = self.transform(x2)
+        if self.return_paths:
+            return {'x1':x1, 'x2':x2, 'y1':y1, 'y2':y2, 'x1_path':x1_src, 'x2_path':x2_src}
+        return {'x1':x1, 'x2':x2, 'y1':y1, 'y2':y2}
 
-        return {'A': A, 'B': B, 'A_class' : self.classes.index(A_class), 'B_class' : self.classes.index(B_class), 'A_paths': A_path, 'B_paths': B_path}
 
-    def __len__(self):
-        """
-        Return the total number of images in the dataset.
-        """
-        return self.size
+class ReferenceDataset(SingleDataset):
+    """
+    This dataset returns images from two domains with a additional reference image from the second somain.
+    The domains are selected at random if the arguments class_a and class_b are not passed.
+    """
+    @staticmethod
+    def modify_commandline_arguments(parser, is_train):
+        parser.add_argument('--class_a', type=str, default=None, help='name of the directory containing class A images')
+        parser.add_argument('--class_b', type=str, default=None, help='name of the directory containing class B images')
+        return parser
+
+    def __init__(self, args, return_paths=False):
+        super(ReferenceDataset, self).__init__(args, return_paths)
+        if self.args.class_a and self.args.class_b:
+            self.targets = sorted([self.target_names.index(self.args.class_a),
+                            self.target_names.index(self.args.class_b)])
+
+    def __getitem__(self, index):
+        # sample a random class
+        if len(self.targets) == 2:
+            y1_src, y2_src = self.targets[0], self.targets[1]
+        else:
+            y1_src, y2_src = random.choice(self.targets, 2, replace=False)
+        # generate one-hot label
+        y1 = torch.zeros((self.num_domains,))
+        y2 = torch.zeros((self.num_domains,))
+        y2_1 = torch.zeros((self.num_domains,))
+        y1[y1_src] = 1
+        y2[y2_src] = 1
+        y2_1[y2_src] = 1
+        # get image
+        x1_src = self.dataset[y1_src][index % len(self.dataset[y1_src])]
+        x2_src = self.dataset[y2_src][index % len(self.dataset[y2_src])]
+        x2_src2 = self.dataset[y2_src][random.randint(len(self.dataset[y2_src]))]
+        x1 = Image.open(x1_src).convert('RGB')
+        x2 = Image.open(x2_src).convert('RGB')
+        x2_1 = Image.open(x2_src2).convert('RGB')
+        if self.transform is not None:
+            x1 = self.transform(x1)
+            x2 = self.transform(x2)
+            x2_1 = self.transform(x2_1)
+        if self.return_paths:
+            return {'x1':x1, 'x2':x2, 'x2_1':x2_1, 'y1':y1, 'y2':y2, 'y2_1':y2_1, 'x1_path':x1_src, 'x2_path':x2_src, 'x2_1_path':x2_src2}
+        return {'x1':x1, 'x2':x2, 'x2_1':x2_1, 'y1':y1, 'y2':y2, 'y2_1':y2_1}

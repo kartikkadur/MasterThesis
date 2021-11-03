@@ -58,7 +58,7 @@ class GANLoss(nn.Module):
         Returns:
             the calculated loss.
         """
-        if self.gan_mode in ['lsgan', 'vanilla']:
+        if self.gan_mode in ['lsgan', 'vanilla', 'bce']:
             target_tensor = self.get_target_tensor(prediction, target_is_real)
             loss = self.loss(prediction, target_tensor)
         elif self.gan_mode == 'wgangp':
@@ -67,6 +67,25 @@ class GANLoss(nn.Module):
             else:
                 loss = prediction.mean()
         return loss
+
+
+class RegressionLoss(object):
+    """
+    computes regression loss
+    """
+    def __init__(self):
+        pass
+    
+    def __call__(self, d_out, x_real):
+        batch_size = x_real.size(0)
+        grad_dout = torch.autograd.grad(
+                    outputs=d_out.sum(), inputs=x_real,
+                    create_graph=True, retain_graph=True, only_inputs=True
+                    )[0]
+        grad_dout2 = grad_dout.pow(2)
+        assert(grad_dout2.size() == x_real.size())
+        reg = 0.5 * grad_dout2.view(batch_size, -1).sum(1).mean(0)
+        return reg
 
 
 class PerceptualLoss(nn.Module):

@@ -2,7 +2,7 @@ import os
 import torch
 
 from dataset.base_dataset import Dataset, get_transform
-from dataset.image_folder import make_dataset
+from dataset import make_image_dataset
 from PIL import Image
 from random import shuffle
 
@@ -27,7 +27,7 @@ class ClassificationDataset(Dataset):
         # read the paths
         path = os.path.join(args.dataroot, args.mode)
         self.classes = [c for c in os.listdir(path) if not c.startswith('.')]
-        self.paths = make_dataset(path)
+        self.paths = make_image_dataset(path)
         shuffle(self.paths)
         # transforms
         input_nc = self.args.input_nc
