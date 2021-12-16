@@ -8,6 +8,7 @@ from torch.nn import init
 from torch.optim import lr_scheduler
 import torch.nn.functional as F
 from torch.autograd import Variable
+from torchvision.models import vgg19
 from inspect import isclass
 
 def get_norm_layer(norm_layer ='instance'):
@@ -18,7 +19,11 @@ def get_norm_layer(norm_layer ='instance'):
         elif norm_layer == 'instance':
             norm_layer = functools.partial(nn.InstanceNorm2d, affine=False, track_running_stats=False)
         elif norm_layer == 'layer':
-            norm_layer = functools.partial(nn.LayerNorm)
+            norm_layer = functools.partial(LayerNorm)
+        elif norm_layer == 'adain':
+            norm_layer = functools.partial(AdaptiveInstanceNorm2d)
+        elif norm_layer == 'sn':
+            norm_layer = functools.partial(SpectralNorm)
         else:
             raise NotImplementedError(f"norm type '{norm_layer}' is not supported at the moment")
     elif not (norm_layer == None) and isclass(norm_layer) and not issubclass(norm_layer, nn.Module):
@@ -40,7 +45,8 @@ def get_activation_layer(activation=None):
             raise NotImplementedError(f"activation type '{activation}' is not supported at the moment")
     elif not (activation == None) and isclass(activation) and not issubclass(activation, nn.Module):
         raise ValueError(f"parameter type of activation should be one of 'str' or 'nn.Module', but got {type(activation)}.")
-    activation = activation if isinstance(activation, nn.Module) else activation()
+    if activation is not None:
+        activation = activation if isinstance(activation, nn.Module) else activation()
     return activation
 
 def get_padding_layer(padding_type=None):
@@ -196,11 +202,11 @@ class BasicBlock(nn.Module):
 
 class ResnetBlock(nn.Module):
     """resnet block"""
-    def __init__(self, input_nc, output_nc, stride=1, dropout=0.0, padding_type=None):
+    def __init__(self, input_nc, output_nc, dropout=0.0, norm_layer='instance', padding_type=None, activation='relu'):
         super(ResnetBlock, self).__init__()
         model = []
-        model += conv_block(input_nc, output_nc, 3, stride, padding=1, padding_type=padding_type, norm_layer='instance', activation='relu')
-        model += conv_block(output_nc, output_nc, 3, stride, padding=1, padding_type=padding_type, norm_layer='instance')
+        model += conv_block(input_nc, output_nc, 3, 1, 1, padding_type=padding_type, norm_layer=norm_layer, activation=activation)
+        model += conv_block(output_nc, output_nc, 3, 1, 1, padding_type=padding_type, norm_layer=norm_layer)
         if dropout > 0:
             model += [nn.Dropout(dropout)]
         self.model = nn.Sequential(*model)
@@ -259,10 +265,111 @@ class LayerNorm(nn.Module):
         else:
             return F.layer_norm(x, normalized_shape)
 
+class SpectralNorm(nn.Module):
+    """
+    Based on the paper "Spectral Normalization for Generative Adversarial Networks" by Takeru Miyato, Toshiki Kataoka, Masanori Koyama, Yuichi Yoshida
+    and the Pytorch implementation https://github.com/christiancosgrove/pytorch-spectral-normalization-gan
+    """
+    def __init__(self, module, name='weight', power_iterations=1):
+        super(SpectralNorm, self).__init__()
+        self.module = module
+        self.name = name
+        self.power_iterations = power_iterations
+        if not self._made_params():
+            self._make_params()
+
+    def _update_u_v(self):
+        u = getattr(self.module, self.name + "_u")
+        v = getattr(self.module, self.name + "_v")
+        w = getattr(self.module, self.name + "_bar")
+
+        height = w.data.shape[0]
+        for _ in range(self.power_iterations):
+            v.data = l2normalize(torch.mv(torch.t(w.view(height,-1).data), u.data))
+            u.data = l2normalize(torch.mv(w.view(height,-1).data, v.data))
+
+        # sigma = torch.dot(u.data, torch.mv(w.view(height,-1).data, v.data))
+        sigma = u.dot(w.view(height, -1).mv(v))
+        setattr(self.module, self.name, w / sigma.expand_as(w))
+
+    def _made_params(self):
+        try:
+            u = getattr(self.module, self.name + "_u")
+            v = getattr(self.module, self.name + "_v")
+            w = getattr(self.module, self.name + "_bar")
+            return True
+        except AttributeError:
+            return False
+
+    def _make_params(self):
+        w = getattr(self.module, self.name)
+
+        height = w.data.shape[0]
+        width = w.view(height, -1).data.shape[1]
+
+        u = nn.Parameter(w.data.new(height).normal_(0, 1), requires_grad=False)
+        v = nn.Parameter(w.data.new(width).normal_(0, 1), requires_grad=False)
+        u.data = l2normalize(u.data)
+        v.data = l2normalize(v.data)
+        w_bar = nn.Parameter(w.data)
+
+        del self.module._parameters[self.name]
+
+        self.module.register_parameter(self.name + "_u", u)
+        self.module.register_parameter(self.name + "_v", v)
+        self.module.register_parameter(self.name + "_bar", w_bar)
+
+    def forward(self, *args):
+        self._update_u_v()
+        return self.module.forward(*args)
+
+class AdaptiveInstanceNorm2d(nn.Module):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1):
+        super(AdaptiveInstanceNorm2d, self).__init__()
+        self.num_features = num_features
+        self.eps = eps
+        self.momentum = momentum
+        # weight and bias are dynamically assigned
+        self.weight = None
+        self.bias = None
+        # just dummy buffers, not used
+        self.register_buffer('running_mean', torch.zeros(num_features))
+        self.register_buffer('running_var', torch.ones(num_features))
+
+    def forward(self, x):
+        assert self.weight is not None and self.bias is not None, "Please assign weight and bias before calling AdaIN!"
+        b, c = x.size(0), x.size(1)
+        running_mean = self.running_mean.repeat(b)
+        running_var = self.running_var.repeat(b)
+        # Apply instance norm
+        x_reshaped = x.contiguous().view(1, b * c, *x.size()[2:])
+        out = F.batch_norm(
+            x_reshaped, running_mean, running_var, self.weight, self.bias,
+            True, self.momentum, self.eps)
+        return out.view(b, c, *x.size()[2:])
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(' + str(self.num_features) + ')'
+
+    def forward(self, x):
+        shape = [-1] + [1] * (x.dim() - 1)
+        if x.size(0) == 1:
+            # These two lines run much faster in pytorch 0.4 than the two lines listed below.
+            mean = x.view(-1).mean().view(*shape)
+            std = x.view(-1).std().view(*shape)
+        else:
+            mean = x.view(x.size(0), -1).mean(1).view(*shape)
+            std = x.view(x.size(0), -1).std(1).view(*shape)
+
+        x = (x - mean) / (std + self.eps)
+
+        if self.affine:
+            shape = [1, -1] + [1] * (x.dim() - 2)
+            x = x * self.gamma.view(*shape) + self.beta.view(*shape)
+        return x
 ################
 ### Networks ###
 ################
-
 class ContentEncoder(nn.Module):
     """Encoder model for encoding image content to a latent representation"""
     def __init__(self, input_nc, ngf=64, num_downs=2, n_blocks=4, norm_layer='instance', padding_type='reflect'):
@@ -451,80 +558,32 @@ class ContentDiscriminator(nn.Module):
     out = self.pool(out)
     out = out.view(out.size(0), out.size(1))
     return out
+###################
+### VGG network ###
+###################
 
-##############
-### VGG-16 ###
-##############
-class VGG16(nn.Module):
-    def __init__(self, layers=['relu5_3']):
-        super(VGG16, self).__init__()
-        self.layers = layers
-        self.conv1_1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1)
-        self.conv1_2 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
-
-        self.conv2_1 = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1)
-        self.conv2_2 = nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1)
-
-        self.conv3_1 = nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1)
-        self.conv3_2 = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
-        self.conv3_3 = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
-
-        self.conv4_1 = nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1)
-        self.conv4_2 = nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1)
-        self.conv4_3 = nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1)
-
-        self.conv5_1 = nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1)
-        self.conv5_2 = nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1)
-        self.conv5_3 = nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1)
+class VGG19(nn.Module):
+    """define pretrained vgg19 network for perceptual loss"""
+    def __init__(self, feature_layers=[2, 7, 12, 21, 30]):
+        super(VGG19, self).__init__()
+        vgg_features = vgg19(pretrained=True).features
+        self.model = nn.ModuleList()
+        for i, f in enumerate(feature_layers):
+            if i == 0:
+                self.model.append(vgg_features[:f])
+            else:
+                self.model.append(vgg_features[feature_layers[i-1]:f])
+        for param in self.parameters():
+                param.requires_grad = False
 
     def forward(self, x):
         outputs = []
-        h = F.relu(self.conv1_1(x), inplace=True)
-        h = F.relu(self.conv1_2(h), inplace=True)
-        # relu1_2 = h
-        h = F.max_pool2d(h, kernel_size=2, stride=2)
-
-        h = F.relu(self.conv2_1(h), inplace=True)
-        h = F.relu(self.conv2_2(h), inplace=True)
-        # relu2_2 = h
-        h = F.max_pool2d(h, kernel_size=2, stride=2)
-
-        h = F.relu(self.conv3_1(h), inplace=True)
-        h = F.relu(self.conv3_2(h), inplace=True)
-        h = F.relu(self.conv3_3(h), inplace=True)
-        h = F.max_pool2d(h, kernel_size=2, stride=2)
-
-        h = F.relu(self.conv4_1(h), inplace=True)
-        relu4_1 = h
-        h = F.relu(self.conv4_2(h), inplace=True)
-        relu4_2 = h
-        conv4_3 = self.conv4_3(h)
-        h = F.relu(conv4_3, inplace=True)
-        relu4_3 = h
-        h = F.max_pool2d(h, kernel_size=2, stride=2)
-        
-        relu5_1 = F.relu(self.conv5_1(h), inplace=True)
-        relu5_2 = F.relu(self.conv5_2(relu5_1), inplace=True)
-        conv5_3 = self.conv5_3(relu5_2) 
-        h = F.relu(conv5_3, inplace=True)
-        relu5_3 = h
-        if "conv4_3" in self.layers:
-            outputs.append(conv4_3)
-        elif "relu4_2" in self.layers:
-            outputs.append(relu4_2)
-        elif "relu4_1" in self.layers:
-            outputs.append(relu4_1)
-        elif "relu4_3" in self.layers:
-            outputs.append(relu4_3)
-        elif "conv5_3" in self.layers:
-            outputs.append(conv5_3)
-        elif "relu5_1" in self.layers:
-            outputs.append(relu5_1)
-        elif "relu5_2" in self.layers:
-            outputs.append(relu5_2)
-        elif "relu5_3" in self.layers:
-            outputs.append(relu5_3)
+        h = x
+        for model in self.model:
+            h = model(h)
+            outputs.append(h)
         return outputs
+
 ############################
 #### Network generators ####
 ############################

@@ -29,7 +29,7 @@ class Arguments(object):
         self.parser.add_argument('--dataroot', required=True, help='root folder of the dataset')
         self.parser.add_argument('--name', type=str, default=f'{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}', help='name of the experiment. It decides where to store samples and model')
         self.parser.add_argument('--gpu_ids', type=str, default='0', help='gpu ids: e.g. 0  0,1,2, 0,2. use -1 for CPU')
-        self.parser.add_argument('--exp_dir', type=str, default='./exps', help='custom directory for storing experiment results')
+        self.parser.add_argument('--exp_dir', type=str, default='../exps', help='custom directory for storing experiment results')
         # model parameters
         self.parser.add_argument('--model', type=str, default='DRIT', help='chooses which model to use.')
         self.parser.add_argument('--input_nc', type=int, default=3, help='# of input image channels: 3 for RGB and 1 for grayscale')
@@ -96,6 +96,7 @@ class TrainArguments(Arguments):
         self.parser.add_argument('--lr_policy', type=str, default='lambda', help='type of learn rate decay')
         self.parser.add_argument('--n_epoch', type=int, default=200, help='number of epochs to train')
         self.parser.add_argument('--start_epoch', type=int, default=1, help='start epoch number')
+        self.parser.add_argument('--max_iter', type=float, default=float('inf'), help='global maximum iterations to be performed')
         self.parser.add_argument('--d_iter', type=int, default=3, help='num iteration to update content discriminator')
         self.parser.add_argument('--n_epoch_decay', type=int, default=100, help='epoch start decay learning rate, set -1 if no decay')
         self.parser.add_argument('--lambda_rec', type=float, default=10, help='weight for reconstruction loss')
@@ -108,11 +109,11 @@ class TrainArguments(Arguments):
         self.parser.add_argument('--gan_mode', type=str, default='vanilla', help='which type of loss to be used for adversarial training')
         self.parser.add_argument('--resume_opt', type=str, default=None, help='path to checkpoint to load for optimizer')
         # perceptual loss parameters
-        self.parser.add_argument('--lambda_perceptual', type=float, default=1.0, help='weight for perceptual loss for Generator')
+        self.parser.add_argument('--lambda_perceptual', type=float, default=10, help='weight for perceptual loss for Generator')
         self.parser.add_argument('--vgg_loss', type=str, default=None, help='loss to be used to calculate perceptual loss')
         self.parser.add_argument('--vgg_checkpoint', type=str, default=None, help='path to pretrained vgg checkpoint')
         self.parser.add_argument('--no_vgg_instance', action='store_false', help='weather to use vgg instance or not')
-        self.parser.add_argument('--vgg_layers', type=str, nargs='+', default='relu5_3', help='layers to consider for perceptual loss')
+        self.parser.add_argument('--vgg_layers', type=int, nargs='+', default=[2, 7, 12, 21, 30], help='layers to consider for perceptual loss')
 
 class TestArguments(Arguments):
     """arguments specific for test run"""

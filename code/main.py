@@ -54,8 +54,12 @@ class Trainer(object):
                     if (global_iter % self.args.display_freq) == 0:
                         block.log('Writing images')
                         self.model.save_images(epoch, global_iter)
+                    if global_iter % self.args.max_iter == 0.0:
+                        return
                 if self.args.n_epoch_decay > -1:
                     self.model.update_lr()
+            block.log(f'Saving model inside : {self.args.checkpoint_dir}')
+            self.model.save(epoch, global_iter)
 
     def test(self):
         with TimerBlock('testing model') as block:
