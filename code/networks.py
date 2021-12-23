@@ -21,7 +21,7 @@ def get_norm_layer(norm_layer ='instance'):
         elif norm_layer == 'layer':
             norm_layer = functools.partial(LayerNorm)
         elif norm_layer == 'adain':
-            norm_layer = functools.partial(AdaptiveInstanceNorm2d)
+            norm_layer = functools.partial(AdaIN)
         elif norm_layer == 'sn':
             norm_layer = functools.partial(SpectralNorm)
         else:
@@ -152,9 +152,14 @@ def conv_block(in_nc, out_nc, kernel_size, stride=1, padding=0, output_padding=0
         block += [activation]
     return block
 
-def conv_transpose_2d_block(in_ch, out_ch, kernel_size=3, stride=1, padding=0, output_padding=0):
+def layernorm_upsample_block(in_ch, out_ch, kernel_size=3, stride=1, padding=0, output_padding=0, layer='conv_transpose'):
         layers = []
-        layers += [nn.ConvTranspose2d(in_ch, out_ch, kernel_size=kernel_size, stride=stride, padding=padding, output_padding=output_padding, bias=True)]
+        if 'conv_transpose' in layer:
+            layers += [nn.ConvTranspose2d(in_ch, out_ch, kernel_size=kernel_size, stride=stride, 
+                                                padding=padding, output_padding=output_padding, bias=True)]
+        else:
+            layers += [nn.Upsample(scale_factor=2),
+                       nn.Conv2d(in_ch, out_ch, kernel_size, stride=1, padding=1, bias=True)]
         layers += [LayerNorm(out_ch)]
         layers += [nn.ReLU(inplace=True)]
         return layers
@@ -162,6 +167,30 @@ def conv_transpose_2d_block(in_ch, out_ch, kernel_size=3, stride=1, padding=0, o
 ####################
 ### Basic Blocks ###
 ####################
+
+class AdaIN(nn.Module):
+    def __init__(self, latent_dim, num_features):
+        super(AdaIN, self).__init__()
+        self.norm = nn.InstanceNorm2d(num_features, affine=False)
+        self.fc = nn.Linear(latent_dim, num_features*2)
+
+    def forward(self, x, s):
+        h = self.fc(s)
+        h = h.view(h.size(0), h.size(1), 1, 1)
+        gamma, beta = torch.chunk(h, chunks=2, dim=1)
+        return (1 + gamma) * self.norm(x) + beta
+
+class HighPass(nn.Module):
+    def __init__(self, w_hpf, device):
+        super(HighPass, self).__init__()
+        self.register_buffer('filter',
+                             torch.tensor([[-1, -1, -1],
+                                           [-1, 8., -1],
+                                           [-1, -1, -1]]) / w_hpf)
+
+    def forward(self, x):
+        filter = self.filter.unsqueeze(0).unsqueeze(1).repeat(x.size(1), 1, 1, 1)
+        return F.conv2d(x, filter, padding=1, groups=x.size(1))
 
 class ConvBlock(nn.Module):
     """Convolution block containing conv, norm layer and activation layer"""
@@ -239,6 +268,35 @@ class ResnetBlock2(nn.Module):
         out += residual
         return out
 
+class AdaINResnetBlock(nn.Module):
+    def __init__(self, dim_in, dim_out, latent_dim=64, activation='leaky_relu', upsample=False):
+        super(AdaINResnetBlock, self).__init__()
+        self.activation = get_activation_layer(activation)
+        self.upsample = upsample
+        self.learned_sc = dim_in != dim_out
+        self.model = []
+        self.model += conv_block(dim_in, dim_out, 3, 1, 1, activation=activation, norm_layer='adain')
+        self.model += conv_block(dim_out, dim_out, 3, 1, 1, activation=activation, norm_layer='adain')
+        if self.learned_sc:
+            self.conv1x1 += nn.Conv2d(dim_in, dim_out, 1, 1, 0, bias=False)
+        self.model = nn.Sequential(*self.model)
+
+    def _shortcut(self, x):
+        if self.upsample:
+            x = F.interpolate(x, scale_factor=2, mode='nearest')
+        if self.learned_sc:
+            x = self.conv1x1(x)
+        return x
+
+    def _residual(self, x, s):
+        if self.upsample:
+            x = F.interpolate(x, scale_factor=2, mode='nearest')
+        return self.model(x)
+
+    def forward(self, x, s):
+        out = (self._residual(x, s) + self._shortcut(x)) / np.sqrt(2)
+        return out
+
 class GaussianNoiseLayer(nn.Module):
     def __init__(self):
         super(GaussianNoiseLayer, self).__init__()
@@ -248,6 +306,10 @@ class GaussianNoiseLayer(nn.Module):
             return x
         noise = Variable(torch.randn(x.size()).to(x.get_device()))
         return x + noise
+
+############################
+### Normalization layers ###
+############################
 
 class LayerNorm(nn.Module):
     def __init__(self, n_out, eps=1e-5, affine=True):
@@ -265,111 +327,33 @@ class LayerNorm(nn.Module):
         else:
             return F.layer_norm(x, normalized_shape)
 
-class SpectralNorm(nn.Module):
-    """
-    Based on the paper "Spectral Normalization for Generative Adversarial Networks" by Takeru Miyato, Toshiki Kataoka, Masanori Koyama, Yuichi Yoshida
-    and the Pytorch implementation https://github.com/christiancosgrove/pytorch-spectral-normalization-gan
-    """
-    def __init__(self, module, name='weight', power_iterations=1):
-        super(SpectralNorm, self).__init__()
-        self.module = module
-        self.name = name
-        self.power_iterations = power_iterations
-        if not self._made_params():
-            self._make_params()
-
-    def _update_u_v(self):
-        u = getattr(self.module, self.name + "_u")
-        v = getattr(self.module, self.name + "_v")
-        w = getattr(self.module, self.name + "_bar")
-
-        height = w.data.shape[0]
-        for _ in range(self.power_iterations):
-            v.data = l2normalize(torch.mv(torch.t(w.view(height,-1).data), u.data))
-            u.data = l2normalize(torch.mv(w.view(height,-1).data, v.data))
-
-        # sigma = torch.dot(u.data, torch.mv(w.view(height,-1).data, v.data))
-        sigma = u.dot(w.view(height, -1).mv(v))
-        setattr(self.module, self.name, w / sigma.expand_as(w))
-
-    def _made_params(self):
-        try:
-            u = getattr(self.module, self.name + "_u")
-            v = getattr(self.module, self.name + "_v")
-            w = getattr(self.module, self.name + "_bar")
-            return True
-        except AttributeError:
-            return False
-
-    def _make_params(self):
-        w = getattr(self.module, self.name)
-
-        height = w.data.shape[0]
-        width = w.view(height, -1).data.shape[1]
-
-        u = nn.Parameter(w.data.new(height).normal_(0, 1), requires_grad=False)
-        v = nn.Parameter(w.data.new(width).normal_(0, 1), requires_grad=False)
-        u.data = l2normalize(u.data)
-        v.data = l2normalize(v.data)
-        w_bar = nn.Parameter(w.data)
-
-        del self.module._parameters[self.name]
-
-        self.module.register_parameter(self.name + "_u", u)
-        self.module.register_parameter(self.name + "_v", v)
-        self.module.register_parameter(self.name + "_bar", w_bar)
-
-    def forward(self, *args):
-        self._update_u_v()
-        return self.module.forward(*args)
-
 class AdaptiveInstanceNorm2d(nn.Module):
-    def __init__(self, num_features, eps=1e-5, momentum=0.1):
+    """applies adaptive instance normalization to input image"""
+    def __init__(self) -> None:
         super(AdaptiveInstanceNorm2d, self).__init__()
-        self.num_features = num_features
-        self.eps = eps
-        self.momentum = momentum
-        # weight and bias are dynamically assigned
-        self.weight = None
-        self.bias = None
-        # just dummy buffers, not used
-        self.register_buffer('running_mean', torch.zeros(num_features))
-        self.register_buffer('running_var', torch.ones(num_features))
 
-    def forward(self, x):
-        assert self.weight is not None and self.bias is not None, "Please assign weight and bias before calling AdaIN!"
-        b, c = x.size(0), x.size(1)
-        running_mean = self.running_mean.repeat(b)
-        running_var = self.running_var.repeat(b)
-        # Apply instance norm
-        x_reshaped = x.contiguous().view(1, b * c, *x.size()[2:])
-        out = F.batch_norm(
-            x_reshaped, running_mean, running_var, self.weight, self.bias,
-            True, self.momentum, self.eps)
-        return out.view(b, c, *x.size()[2:])
+    def calc_mean_std(self, feat, eps=1e-5):
+        size = feat.size()
+        assert (len(size) == 4)
+        N, C = size[:2]
+        feat_var = feat.view(N, C, -1).var(dim=2) + eps
+        feat_std = feat_var.sqrt().view(N, C, 1, 1)
+        feat_mean = feat.view(N, C, -1).mean(dim=2).view(N, C, 1, 1)
+        return feat_mean, feat_std
 
-    def __repr__(self):
-        return self.__class__.__name__ + '(' + str(self.num_features) + ')'
+    def forward(self, content, style):
+        assert (content.size()[:2] == style.size()[:2])
+        size = content.size()
+        style_mean, style_std = self.calc_mean_std(style)
+        content_mean, content_std = self.calc_mean_std(content)
+        normalized_feat = (content - content_mean.expand(
+            size)) / content_std.expand(size)
+        return normalized_feat * style_std.expand(size) + style_mean.expand(size)
 
-    def forward(self, x):
-        shape = [-1] + [1] * (x.dim() - 1)
-        if x.size(0) == 1:
-            # These two lines run much faster in pytorch 0.4 than the two lines listed below.
-            mean = x.view(-1).mean().view(*shape)
-            std = x.view(-1).std().view(*shape)
-        else:
-            mean = x.view(x.size(0), -1).mean(1).view(*shape)
-            std = x.view(x.size(0), -1).std(1).view(*shape)
-
-        x = (x - mean) / (std + self.eps)
-
-        if self.affine:
-            shape = [1, -1] + [1] * (x.dim() - 2)
-            x = x * self.gamma.view(*shape) + self.beta.view(*shape)
-        return x
 ################
 ### Networks ###
 ################
+
 class ContentEncoder(nn.Module):
     """Encoder model for encoding image content to a latent representation"""
     def __init__(self, input_nc, ngf=64, num_downs=2, n_blocks=4, norm_layer='instance', padding_type='reflect'):
@@ -438,7 +422,7 @@ class AttributeEncoderConcat(nn.Module):
         return output, outputVar
 
 class Generator(nn.Module):
-    def __init__(self, output_nc, ngf=256, num_domains=2, latent_dim=8):
+    def __init__(self, output_nc, ngf=256, num_domains=2, latent_dim=8, upsample_layer='conv_transpose'):
         super(Generator, self).__init__()
         init_nch = ngf
         nch_add = init_nch
@@ -448,13 +432,16 @@ class Generator(nn.Module):
         self.dec2 = ResnetBlock2(nch, nch_add)
         self.dec3 = ResnetBlock2(nch, nch_add)
         self.dec4 = ResnetBlock2(nch, nch_add)
-
         dec5 = []
-        dec5 += conv_transpose_2d_block(nch, nch//2, kernel_size=3, stride=2, padding=1, output_padding=1)
+        dec5 += layernorm_upsample_block(nch, nch//2, kernel_size=3, stride=2, padding=1, output_padding=1, layer=upsample_layer)
         nch = nch//2
-        dec5 += conv_transpose_2d_block(nch, nch//2, kernel_size=3, stride=2, padding=1, output_padding=1)
+        dec5 += layernorm_upsample_block(nch, nch//2, kernel_size=3, stride=2, padding=1, output_padding=1, layer=upsample_layer)
         nch = nch//2
-        dec5 += [nn.ConvTranspose2d(nch, output_nc, kernel_size=1, stride=1, padding=0)]
+        if 'conv_transpose' in upsample_layer:
+            dec5 += [nn.ConvTranspose2d(nch, output_nc, kernel_size=1, stride=1, padding=0)]
+        else:
+            dec5 += [nn.Upsample(scale_factor=1)]
+            dec5 += [nn.Conv2d(nch, output_nc, kernel_size=1, stride=1, padding=0)]
         dec5 += [nn.Tanh()]
         self.dec5 = nn.Sequential(*dec5)
 
@@ -478,7 +465,7 @@ class Generator(nn.Module):
         return out
 
 class GeneratorConcat(nn.Module):
-    def __init__(self, output_nc, ngf=256, n_blocks=3, num_domains=2, latent_dim=8):
+    def __init__(self, output_nc, ngf=256, n_blocks=3, num_domains=2, latent_dim=8, upsample_layer='conv_transpose'):
         super(GeneratorConcat, self).__init__()
         dec_share = []
         dec_share += [ResnetBlock(ngf, ngf)]
@@ -489,15 +476,19 @@ class GeneratorConcat(nn.Module):
             dec1 += [ResnetBlock(nch, nch)]
         self.dec1 = nn.Sequential(*dec1)
         nch = nch + latent_dim
-        dec2 = conv_transpose_2d_block(nch, nch//2, kernel_size=3, stride=2, padding=1, output_padding=1)
+        dec2 = layernorm_upsample_block(nch, nch//2, kernel_size=3, stride=2, padding=1, output_padding=1, layer=upsample_layer)
         self.dec2 = nn.Sequential(*dec2)
         nch = nch//2
         nch = nch + latent_dim
-        dec3 = conv_transpose_2d_block(nch, nch//2, kernel_size=3, stride=2, padding=1, output_padding=1)
+        dec3 = layernorm_upsample_block(nch, nch//2, kernel_size=3, stride=2, padding=1, output_padding=1, layer=upsample_layer)
         self.dec3 = nn.Sequential(*dec3)
         nch = nch//2
         nch = nch + latent_dim
-        dec4 = [nn.ConvTranspose2d(nch, output_nc, kernel_size=1, stride=1, padding=0)]
+        if 'conv_transpose' in upsample_layer:
+            dec4 = [nn.ConvTranspose2d(nch, output_nc, kernel_size=1, stride=1, padding=0)]
+        else:
+            dec4 = [nn.Upsample(scale_factor=1),
+                    nn.Conv2d(nch, output_nc, kernel_size=1, stride=1, padding=0)]
         dec4 += [nn.Tanh()]
         self.dec4 = nn.Sequential(*dec4)
 
@@ -543,45 +534,46 @@ class Discriminator(nn.Module):
         return out, out_cls.view(out_cls.size(0), out_cls.size(1))
 
 class ContentDiscriminator(nn.Module):
-  def __init__(self, num_domains=3, ndf=256):
-    super(ContentDiscriminator, self).__init__()
-    layers = []
-    for i in range(3):
-        layers += [ConvBlock(ndf, ndf, kernel_size=7, stride=2, padding=1, padding_type='reflect', norm_layer='instance', activation='leaky_relu')]
-    layers += [ConvBlock(ndf, ndf, kernel_size=4, stride=1, padding=0, padding_type='reflect', activation='leaky_relu')]
-    layers += [nn.Conv2d(ndf, num_domains, kernel_size=1, stride=1, padding=0)]
-    self.pool = nn.AdaptiveAvgPool2d(1)
-    self.model = nn.Sequential(*layers)
+    def __init__(self, num_domains=3, ndf=256):
+        super(ContentDiscriminator, self).__init__()
+        layers = []
+        for i in range(3):
+            layers += [ConvBlock(ndf, ndf, kernel_size=7, stride=2, padding=1, padding_type='reflect', norm_layer='instance', activation='leaky_relu')]
+        layers += [ConvBlock(ndf, ndf, kernel_size=4, stride=1, padding=0, padding_type='reflect', activation='leaky_relu')]
+        layers += [nn.Conv2d(ndf, num_domains, kernel_size=1, stride=1, padding=0)]
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.model = nn.Sequential(*layers)
 
-  def forward(self, x):
-    out = self.model(x)
-    out = self.pool(out)
-    out = out.view(out.size(0), out.size(1))
-    return out
-###################
-### VGG network ###
-###################
+    def forward(self, x):
+        out = self.model(x)
+        out = self.pool(out)
+        out = out.view(out.size(0), out.size(1))
+        return out
 
-class VGG19(nn.Module):
-    """define pretrained vgg19 network for perceptual loss"""
-    def __init__(self, feature_layers=[2, 7, 12, 21, 30]):
-        super(VGG19, self).__init__()
-        vgg_features = vgg19(pretrained=True).features
-        self.model = nn.ModuleList()
-        for i, f in enumerate(feature_layers):
-            if i == 0:
-                self.model.append(vgg_features[:f])
-            else:
-                self.model.append(vgg_features[feature_layers[i-1]:f])
-        for param in self.parameters():
-                param.requires_grad = False
+class MultiScaleDiscriminator(nn.Module):
+    def __init__(self, input_nc, ndf=64, n_layers=6, norm_layer=None, activation='leaky_relu',
+                                        padding_type=None, num_domains=2, num_scales=3, sn=False):
+        super(MultiScaleDiscriminator, self).__init__()
+        self.num_scales = num_scales
+        self.downsample = nn.AvgPool2d(3, stride=2, padding=[1, 1], count_include_pad=False)
+        self.model = []
+        self.model += [ConvBlock(input_nc, ndf, 4, 2, 1, norm_layer=None, activation=activation, padding_type=padding_type, sn=sn)]
+        for i in range(n_layers - 1):
+            self.model += [ConvBlock(ndf, ndf * 2, 4, 2, 1, norm_layer=norm_layer, activation=activation, padding_type=padding_type, sn=sn)]
+            ndf *= 2
+        self.model = nn.Sequential(*self.model)
+        self.dis = nn.Conv2d(ndf, 1, 1, 1, 0)
+        self.cls = nn.Conv2d(ndf, num_domains, 1, 1, 0)
+        self.pool = nn.AdaptiveAvgPool2d(1)
 
     def forward(self, x):
         outputs = []
-        h = x
-        for model in self.model:
-            h = model(h)
-            outputs.append(h)
+        for i in range(self.num_scales):
+            h = self.model(x)
+            dis = self.dis(h)
+            c = self.pool(self.cls(h))
+            outputs.append((dis, c.view(c.size(0), c.size(1))))
+            x = self.downsample(x)
         return outputs
 
 ############################

@@ -12,34 +12,36 @@ def is_image_file(filename):
     return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
 
 class ImageFolder(Dataset):
-    """reads images from a single folder"""
-    def __init__(self, args, return_paths=False):
+    """reads images from a single folder and returns the raw images and its class"""
+    def __init__(self, args, return_paths=False, transforms=None):
         super(ImageFolder, self).__init__()
         self.args = args
         self.root = self.args.dataroot
         self.dataset = self._make_dataset(self.root)
-        transform = [transforms.Resize((args.load_size, args.load_size), Image.BICUBIC)]
-        if args.mode == 'train':
-            transform.append(transforms.RandomCrop(args.crop_size))
-        transform.append(transforms.ToTensor())
-        transform.append(transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]))
-        self.transforms = transforms.Compose(transform)
+        self.transforms = transforms
     
     def _make_dataset(self, root):
-        return [os.path.join(root, img) for img in os.listdir(root) if is_image_file(img)]
+        dataset = []
+        domains = os.listdir(root)
+        for i, d in enumerate(sorted(domains)):
+            dataset += [(os.path.join(root, d, f), i) for f in os.listdir(os.path.join(root, d))]
+        return dataset
 
     def load_image(self, img_name, dim=3):
         img = Image.open(img_name).convert('RGB')
-        img = self.transforms(img)
+        if self.transforms is not None:
+            img = self.transforms(img)
         if dim == 1:
-            img = img[0, ...] * 0.299 + img[1, ...] * 0.587 + img[2, ...] * 0.114
             img = img.unsqueeze(0)
         return img
 
     def __getitem__(self, index):
-        x = self.dataset[index]
+        x, y = self.dataset[index]
         x = self.load_image(x)
-        return x
+        return x, y
+    
+    def __len__(self):
+        return len(self.dataset)
 
 class SingleDataset(Dataset):
     """Returns a single domain image and label"""

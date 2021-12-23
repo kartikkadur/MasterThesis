@@ -1,4 +1,6 @@
 import os
+
+from numpy.core.numeric import normalize_axis_tuple
 import networks
 import torch
 import torch.nn as nn
@@ -6,9 +8,9 @@ import numpy as np
 import loss
 from models.model import Model
 
-class DRIT(Model):
+class BaseModel(Model):
     def __init__(self, args):
-        super(DRIT, self).__init__(args)
+        super(BaseModel, self).__init__(args)
         self.latent_dim = args.latent_dim
         # lr for content discriminator
         lr_dcontent = args.lr/2.5
@@ -19,16 +21,25 @@ class DRIT(Model):
         # create models
         self.model.cont_enc = networks.ContentEncoder(args.input_nc)
         if self.concat:
-            self.model.att_enc = networks.AttributeEncoderConcat(args.input_nc, output_nc=self.latent_dim, num_domains=args.num_domains, \
-                norm_layer=None, activation='leaky_relu')
-            self.model.gen = networks.GeneratorConcat(args.input_nc, num_domains=args.num_domains, latent_dim=self.latent_dim)
+            self.model.att_enc = networks.AttributeEncoderConcat(args.input_nc, output_nc=self.latent_dim,
+                                                num_domains=args.num_domains, norm_layer=None, activation='leaky_relu')
+            self.model.gen = networks.GeneratorConcat(args.input_nc, num_domains=args.num_domains,
+                                                    latent_dim=self.latent_dim, upsample_layer=args.dec_upsample)
         else:
             self.model.att_enc = networks.AttributeEncoder(args.input_nc, output_nc=self.latent_dim, num_domains=args.num_domains)
             self.model.gen = networks.Generator(args.input_nc, latent_dim=self.latent_dim, num_domains=args.num_domains)
         # create discriminators, optimizers and loss only while training
         if 'train' in args.mode:
-            self.model.dis1 = networks.Discriminator(args.input_nc, norm_layer=args.dis_norm, sn=args.dis_sn, num_domains=args.num_domains, image_size=args.crop_size)
-            self.model.dis2 = networks.Discriminator(args.input_nc, norm_layer=args.dis_norm, sn=args.dis_sn, num_domains=args.num_domains, image_size=args.crop_size)
+            if args.ms_dis:
+                self.model.dis1 = networks.MultiScaleDiscriminator(args.input_nc, norm_layer=args.dis_norm, sn=args.dis_sn,
+                                                                num_domains=args.num_domains, num_scales=args.num_scales)
+                self.model.dis2 = networks.MultiScaleDiscriminator(args.input_nc, norm_layer=args.dis_norm, sn=args.dis_sn,
+                                                                num_domains=args.num_domains, num_scales=args.num_scales)
+            else:
+                self.model.dis1 = networks.Discriminator(args.input_nc, norm_layer=args.dis_norm,
+                                        sn=args.dis_sn, num_domains=args.num_domains, image_size=args.crop_size)
+                self.model.dis2 = networks.Discriminator(args.input_nc, norm_layer=args.dis_norm,
+                                        sn=args.dis_sn, num_domains=args.num_domains, image_size=args.crop_size)
             # create optimizers
             for net in self.model:
                 self.optimizer[net] = torch.optim.Adam(self.model[net].parameters(), lr=args.lr, betas=(0.5, 0.999), weight_decay=0.0001)
@@ -44,7 +55,7 @@ class DRIT(Model):
                 self.perceptual_loss = loss.VGGPerceptualLoss(args).to(self.device)
         self.print_loss = ['g_adv', 'g_cls', 'l1_cc_rec']
 
-    def get_z_random(self, bs, latent_dim, random_type='gauss'):
+    def get_z_random(self, bs, latent_dim):
         z = torch.randn(bs, latent_dim).to(self.device)
         return z
 
@@ -140,14 +151,35 @@ class DRIT(Model):
 
     def update_D(self):
         self.forward()
+        if self.args.ms_dis:
+            backward_fn = self.backward_D_multi_scale
+        else:
+            backward_fn = self.backward_D
         # with encoded images
         self.optimizer.dis1.zero_grad()
-        self.d1_gan_loss, self.d1_cls_loss = self.backward_D(self.model.dis1, self.real, self.fake_encoded, self.c_org)
+        self.d1_gan_loss, self.d1_cls_loss = backward_fn(self.model.dis1, self.real, self.fake_encoded, self.c_org)
         self.optimizer.dis1.step()
         # with latent generated images
         self.optimizer.dis2.zero_grad()
-        self.d2_gan_loss, self.d2_cls_loss = self.backward_D(self.model.dis2, self.real, self.fake_random, self.c_org)
+        self.d2_gan_loss, self.d2_cls_loss = backward_fn(self.model.dis2, self.real, self.fake_random, self.c_org)
         self.optimizer.dis2.step()
+
+    def backward_D_multi_scale(self, netD, real, fake, c_org):
+        # with fake images
+        outputs_fake = netD(fake.detach())
+        outputs_real = netD(real)
+        loss_d_adv = 0
+        loss_d_cls = 0
+        for i, (out0, out1) in enumerate(zip(outputs_fake, outputs_real)):
+            # gan loss
+            loss_d_adv += self.gan_loss(out0[0], 0)
+            loss_d_adv += self.gan_loss(out1[0], 1)
+            # class loss
+            loss_d_cls += self.cls_loss(out1[1], c_org)
+        # dis loss
+        loss_d = loss_d_adv + self.args.lambda_cls * loss_d_cls
+        loss_d.backward()
+        return loss_d_adv.item(), loss_d_cls.item()
 
     def backward_D(self, netD, real, fake, c_org):
         # with fake images
@@ -163,7 +195,7 @@ class DRIT(Model):
         # dis loss
         loss_d = loss_d_adv + self.args.lambda_cls * loss_d_cls
         loss_d.backward()
-        return loss_d_adv, loss_d_cls
+        return loss_d_adv.item(), loss_d_cls.item()
 
     def update_EG(self):
         # update G, Ec, Ea
@@ -189,10 +221,19 @@ class DRIT(Model):
         if self.args.use_dis_content:
             loss_g_content = self.backward_G_GAN_content(z_content, self.c_org)
         # Ladv for generator
-        pred_fake, pred_fake_cls = self.model.dis1(self.fake_encoded)
-        loss_g_adv = self.gan_loss(pred_fake, 1)
-        # classification
-        loss_g_cls = self.cls_loss(pred_fake_cls, self.c_org) * self.args.lambda_cls_G
+        if self.args.ms_dis:
+            outputs_fake = self.model.dis1(self.fake_encoded)
+            loss_g_adv = 0
+            loss_g_cls = 0
+            for out0 in outputs_fake:
+                loss_g_adv += self.gan_loss(out0[0], 1)
+                loss_g_cls += self.cls_loss(out0[1], self.c_org)
+            loss_g_cls *= self.args.lambda_cls_G
+        else:
+            pred_fake, pred_fake_cls = self.model.dis1(self.fake_encoded)
+            loss_g_adv = self.gan_loss(pred_fake, 1)
+            # classification
+            loss_g_cls = self.cls_loss(pred_fake_cls, self.c_org) * self.args.lambda_cls_G
         # self recon
         fake = torch.cat((self.fake_aa_encoded, self.fake_bb_encoded), dim=0)
         loss_g_self = self.l1_loss(self.real, fake) * self.args.lambda_rec
@@ -236,10 +277,19 @@ class DRIT(Model):
     def backward_G_alone(self):
         # Ladv for generator
         fake = torch.cat((self.fake_a_random, self.fake_b_random), dim=0)
-        pred_fake, pred_fake_cls = self.model.dis2(fake)
-        loss_g_adv2 = self.gan_loss(pred_fake, 1)
-        # classification
-        loss_g_cls2 = self.cls_loss(pred_fake_cls, self.c_org) * self.args.lambda_cls_G
+        if self.args.ms_dis:
+            outputs_fake = self.model.dis1(fake)
+            loss_g_adv2 = 0
+            loss_g_cls2 = 0
+            for out0 in outputs_fake:
+                loss_g_adv2 += self.gan_loss(out0[0], 1)
+                loss_g_cls2 += self.cls_loss(out0[1], self.c_org)
+            loss_g_cls2 *= self.args.lambda_cls_G
+        else:
+            pred_fake, pred_fake_cls = self.model.dis2(fake)
+            loss_g_adv2 = self.gan_loss(pred_fake, 1)
+            # classification
+            loss_g_cls2 = self.cls_loss(pred_fake_cls, self.c_org) * self.args.lambda_cls_G
         # perceptual
         if self.args.vgg_loss is not None:
             loss_g_p =  self.perceptual_loss(self.real, self.fake_random) * self.args.lambda_perceptual

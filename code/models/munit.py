@@ -28,8 +28,6 @@ class MUNIT(Model):
             self.l1_loss = nn.L1Loss().to(self.device)
             if args.vgg_loss is not None:
                 self.perceptual_loss = loss.VGGPerceptualLoss(args).to(self.device)
-        # loses to print
-        self.print_loss = ['g_adv', 'g_cls', 'l1_cc_rec']
 
     def set_inputs(self, inputs):
         self.real_a = inputs['x1'].to(self.device).detach()
@@ -84,7 +82,6 @@ class MUNIT(Model):
         style_img = torch.cat((self.fake_a_encoded, self.fake_b_encoded), dim=0)
         self.style_recon = self.model.style_enc(style_img, self.c_org)
         self.fake_recon = self.model.decoder(self.cont_recon, self.style_recon, self.c_org)
-        self.fake_a_recon, self.fake_b_recon = torch.split(self.fake_recon, self.args.batch_size, dim=0)
 
     def update_D(self):
         self.forward()
@@ -199,23 +196,5 @@ class MUNIT(Model):
         return x[:,0:3,:,:]
 
     def optimize_parameters(self, global_iter):
-        if global_iter % self.args.d_iter != 0:
-            self.update_D()
-        else:
-            self.update_D()
-            self.update_G()
-
-    def compute_visuals(self):
-        images_a = self.normalize_image(self.real_a).detach()
-        images_b = self.normalize_image(self.real_b).detach()
-        images_a1 = self.normalize_image(self.fake_a_encoded).detach()
-        images_a2 = self.normalize_image(self.fake_a_random).detach()
-        images_a3 = self.normalize_image(self.fake_a_recon).detach()
-        images_a4 = self.normalize_image(self.fake_aa_encoded).detach()
-        images_b1 = self.normalize_image(self.fake_b_encoded).detach()
-        images_b2 = self.normalize_image(self.fake_b_random).detach()
-        images_b3 = self.normalize_image(self.fake_b_recon).detach()
-        images_b4 = self.normalize_image(self.fake_bb_encoded).detach()
-        row1 = torch.cat((images_a[0:1, ::], images_b1[0:1, ::], images_b2[0:1, ::], images_a4[0:1, ::], images_a3[0:1, ::]), dim=3)
-        row2 = torch.cat((images_b[0:1, ::], images_a1[0:1, ::], images_a2[0:1, ::], images_b4[0:1, ::], images_b3[0:1, ::]), dim=3)
-        return torch.cat((row1,row2), dim=2)
+        self.update_D()
+        self.update_G()

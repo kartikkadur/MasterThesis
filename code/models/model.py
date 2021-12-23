@@ -23,7 +23,8 @@ class Model(ABC, nn.Module):
         self.optimizer = AttributeDict()
         self.scheduler = AttributeDict()
         self.loss = AttributeDict()
-        self.writer = SummaryWriter(log_dir=args.logdir)
+        if 'train' in args.mode:
+            self.writer = SummaryWriter(log_dir=args.logdir)
         self.print_loss = []
 
     @abstractmethod

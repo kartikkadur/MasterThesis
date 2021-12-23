@@ -43,20 +43,26 @@ class Sampler(object):
     def generate_image(self, trg=None, ref=None):
         with TimerBlock('Generating Images') as block:
             block.log('Load image dataset')
-            self.load_image()
+            if os.path.isdir(self.args.dataroot):
+                self.load_image()
+            else:
+                self.load_video()
             block.log("Get transforms")
             transform = self.get_transforms()
+            z_random_style = self.model.get_z_random(1, self.args.latent_dim)
             block.log(f"Saving image into the folder {self.args.display_dir}")
             for i, batch in enumerate(self.dataset):
-                img, label = batch
+                if os.path.isdir(self.args.dataroot):
+                    img, _ = batch
+                else:
+                    img = batch
+                    img = Image.fromarray(img)
                 # apply transforms
                 img = transform(img)
-                # generate image for each domain
-                for domain in range(self.args.num_domains):
-                    with torch.no_grad():
-                        imgs = self.model.forward_random(img.unsqueeze(0), domain)
-                        names = [os.path.join(self.args.display_dir, f'image_{domain}_{i}_{j}.png') for j in range(len(imgs))]
-                    save_images(imgs, names)
+                with torch.no_grad():
+                    imgs = self.model.forward_random(img.unsqueeze(0), z_random_style, trg)
+                    names = [os.path.join(self.args.display_dir, f'image_{trg}_{i}_{j}.png') for j in range(len(imgs))]
+                save_images(imgs, names)
 
     def generate_video(self, trg, ref=None):
         with TimerBlock("Generating Video") as block:
@@ -78,7 +84,7 @@ class Sampler(object):
     def run(self):
         self.create_model()
         if 'image' in self.args.out_fmt:
-            self.generate_image()
+            self.generate_image(self.args.trg_cls)
         else:
             self.generate_video(self.args.trg_cls)
 

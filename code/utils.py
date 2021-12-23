@@ -96,12 +96,11 @@ def save_image(image_numpy, image_path):
     image_pil = Image.fromarray(image_numpy)
     image_pil.save(image_path)
 
-def save_images(images, names, path):
-    os.makedirs(path, exist_ok=True)
+def save_images(images, names):
     for img, name in zip(images, names):
         img = tensor_to_image(img)
         img = Image.fromarray(img)
-        img.save(os.path.join(path, name + '.png'))
+        img.save(name)
 
 def varname(p):
     for line in inspect.getframeinfo(inspect.currentframe().f_back)[3]:

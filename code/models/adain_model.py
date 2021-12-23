@@ -6,12 +6,10 @@ import numpy as np
 import loss
 from models.model import Model
 
-class DRIT(Model):
+class AdaINModel(Model):
     def __init__(self, args):
-        super(DRIT, self).__init__(args)
+        super(AdaINModel, self).__init__(args)
         self.latent_dim = args.latent_dim
-        # lr for content discriminator
-        lr_dcontent = args.lr/2.5
         if args.concat:
             self.concat = True
         else:
@@ -27,6 +25,9 @@ class DRIT(Model):
             self.model.gen = networks.Generator(args.input_nc, latent_dim=self.latent_dim, num_domains=args.num_domains)
         # create discriminators, optimizers and loss only while training
         if 'train' in args.mode:
+            # lr for content discriminator
+            lr_dcontent = args.lr/2.5
+            # discriminators
             self.model.dis1 = networks.Discriminator(args.input_nc, norm_layer=args.dis_norm, sn=args.dis_sn, num_domains=args.num_domains, image_size=args.crop_size)
             self.model.dis2 = networks.Discriminator(args.input_nc, norm_layer=args.dis_norm, sn=args.dis_sn, num_domains=args.num_domains, image_size=args.crop_size)
             # create optimizers
@@ -44,7 +45,20 @@ class DRIT(Model):
                 self.perceptual_loss = loss.VGGPerceptualLoss(args).to(self.device)
         self.print_loss = ['g_adv', 'g_cls', 'l1_cc_rec']
 
-    def get_z_random(self, bs, latent_dim, random_type='gauss'):
+    def load(self, checkpoint, opt_ckpt=None):
+        ckpt = torch.load(checkpoint)
+        if 'train' in self.args.mode:
+            for net in ckpt:
+                self.model[net].load_state_dict(ckpt[net])
+            if opt_ckpt:
+                for opt in opt_ckpt:
+                    self.optimizer[opt].load_state_dict(opt_ckpt[opt])
+        else:
+            models = ['cont_enc', 'att_enc', 'gen']
+            for m in models:
+                self.model[m].load_state_dict(ckpt[m])
+
+    def get_z_random(self, bs, latent_dim):
         z = torch.randn(bs, latent_dim).to(self.device)
         return z
 
@@ -56,6 +70,34 @@ class DRIT(Model):
         # combined image
         self.real = torch.cat((self.real_a, self.real_b), dim=0)
         self.c_org = torch.cat((self.cls_a, self.cls_b), dim=0)
+
+    def forward_random(self, image, z_random=None, c_trg=None):
+        z_content = self.model.cont_enc(image)
+        if z_random is not None and c_trg is not None:
+            label = np.zeros((image.size(0), self.args.num_domains))
+            label[:,c_trg] = 1
+            label = torch.FloatTensor(label).to(self.device)
+            output = self.model.gen(z_content, z_random, label)
+            return output
+        else:
+            for i in range(self.args.num_domains):
+                outputs = []
+                z_random = self.get_z_random(image.size(0), self.latent_dim)
+                c_trg = np.zeros((image.size(0), self.args.num_domains))
+                c_trg[:,i] = 1
+                c_trg = torch.FloatTensor(c_trg).to(self.device)
+                output = self.model.gen(z_content, z_random, c_trg)
+                outputs.append(output)
+            return outputs
+
+    def forward_reference(self, img, ref, c_trg):
+        z_content = self.model.cont_enc(img)
+        mu, logvar = self.model.att_enc(ref, c_trg)
+        std = logvar.mul(0.5).exp_()
+        eps = self.get_z_random(std.size(0), std.size(1))
+        z_attr = eps.mul(std).add_(mu)
+        output = self.model.gen(z_content, z_attr, c_trg)
+        return output
 
     def forward_content(self, img1, img2):
         img = torch.cat((img1, img2), dim=0)
@@ -128,10 +170,10 @@ class DRIT(Model):
                 self.z_attr_random_a, self.z_attr_random_b = torch.split(z_attr_random, self.args.batch_size, dim=0)
  
     def update_D_content(self):
-        self.z_content = self.model.cont_enc(self.real)
-        self.z_content_a, self.z_content_b = torch.split(self.z_content, self.args.batch_size)
+        z_content = self.model.cont_enc(self.real)
+        self.z_content_a, self.z_content_b = torch.split(z_content, self.args.batch_size)
         self.optimizer.cont_dis.zero_grad()
-        pred_cls = self.model.cont_dis(self.z_content.detach())
+        pred_cls = self.model.cont_dis(z_content.detach())
         loss_d_content = self.cls_loss(pred_cls, self.c_org)
         loss_d_content.backward()
         self.loss_d_content = loss_d_content.item()
@@ -170,7 +212,7 @@ class DRIT(Model):
         self.optimizer.cont_enc.zero_grad()
         self.optimizer.att_enc.zero_grad()
         self.optimizer.gen.zero_grad()
-        self.backward_EG()
+        self.backward_reference()
         self.optimizer.cont_enc.step()
         self.optimizer.att_enc.step()
         self.optimizer.gen.step()
@@ -179,11 +221,11 @@ class DRIT(Model):
         # update G, Ec
         self.optimizer.cont_enc.zero_grad()
         self.optimizer.gen.zero_grad()
-        self.backward_G_alone()
+        self.backward_random()
         self.optimizer.cont_enc.step()
         self.optimizer.gen.step()
 
-    def backward_EG(self):
+    def backward_reference(self):
         # content Ladv for generator
         z_content = torch.cat((self.z_content_a, self.z_content_b), dim=0)
         if self.args.use_dis_content:
@@ -233,10 +275,9 @@ class DRIT(Model):
         loss_g_content = self.cls_loss(pred_cls, 1 - c_org)
         return loss_g_content
 
-    def backward_G_alone(self):
+    def backward_random(self):
         # Ladv for generator
-        fake = torch.cat((self.fake_a_random, self.fake_b_random), dim=0)
-        pred_fake, pred_fake_cls = self.model.dis2(fake)
+        pred_fake, pred_fake_cls = self.model.dis2(self.fake_random)
         loss_g_adv2 = self.gan_loss(pred_fake, 1)
         # classification
         loss_g_cls2 = self.cls_loss(pred_fake_cls, self.c_org) * self.args.lambda_cls_G

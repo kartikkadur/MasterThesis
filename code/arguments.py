@@ -26,12 +26,12 @@ class Arguments(object):
     def __init__(self):
         self.parser = argparse.ArgumentParser("Arguments for the program")
         # parse args
-        self.parser.add_argument('--dataroot', required=True, help='root folder of the dataset')
+        self.parser.add_argument('--dataroot', help='root folder of the dataset')
         self.parser.add_argument('--name', type=str, default=f'{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}', help='name of the experiment. It decides where to store samples and model')
         self.parser.add_argument('--gpu_ids', type=str, default='0', help='gpu ids: e.g. 0  0,1,2, 0,2. use -1 for CPU')
         self.parser.add_argument('--exp_dir', type=str, default='../exps', help='custom directory for storing experiment results')
         # model parameters
-        self.parser.add_argument('--model', type=str, default='DRIT', help='chooses which model to use.')
+        self.parser.add_argument('--model', type=str, default='BaseModel', help='chooses which model to use.')
         self.parser.add_argument('--input_nc', type=int, default=3, help='# of input image channels: 3 for RGB and 1 for grayscale')
         self.parser.add_argument('--output_nc', type=int, default=3, help='# of output image channels: 3 for RGB and 1 for grayscale')
         self.parser.add_argument('--ngf', type=int, default=64, help='# of gen filters in the last conv layer')
@@ -45,7 +45,7 @@ class Arguments(object):
         self.parser.add_argument('--use_dis_content', action='store_true', help='weather to use content discriminator')
         self.parser.add_argument('--latent_dim', type=int, default=8, help='size of latent dimention')
         # dataset parameters
-        self.parser.add_argument('--dataset', type=str, default='AlignedDataset', choices=get_modules(dataset), help='chooses how datasets are loaded.')
+        self.parser.add_argument('--dataset', type=str, default='PairedDataset', choices=get_modules(dataset), help='chooses how datasets are loaded.')
         self.parser.add_argument('--shuffle', action='store_true', help='if true, takes the batches randomly, else takes them in serial fashion')
         self.parser.add_argument('--num_workers', default=4, type=int, help='# threads for loading data')
         self.parser.add_argument('--batch_size', type=int, default=4, help='input batch size')
@@ -89,14 +89,11 @@ class TrainArguments(Arguments):
         super(TrainArguments, self).__init__()
         self.parser.add_argument('--gen_norm', type=str, default=None, choices=['batch','instance'], help='normalization layer in generator')
         self.parser.add_argument('--dis_norm', type=str, default=None, choices=['batch','instance'], help='normalization layer in discriminator')
-        self.parser.add_argument('--gen_sn', action='store_true', help='use spectral normalization in generator')
-        self.parser.add_argument('--dis_sn', action='store_true', help='use spectral normalization in discriminator')
         self.parser.add_argument('--lr', type=float, default=0.0001, help='learning rate parameter')
         self.parser.add_argument('--wd', type=float, default=0.0001, help='weight decay parameter')
         self.parser.add_argument('--lr_policy', type=str, default='lambda', help='type of learn rate decay')
         self.parser.add_argument('--n_epoch', type=int, default=200, help='number of epochs to train')
         self.parser.add_argument('--start_epoch', type=int, default=1, help='start epoch number')
-        self.parser.add_argument('--max_iter', type=float, default=float('inf'), help='global maximum iterations to be performed')
         self.parser.add_argument('--d_iter', type=int, default=3, help='num iteration to update content discriminator')
         self.parser.add_argument('--n_epoch_decay', type=int, default=100, help='epoch start decay learning rate, set -1 if no decay')
         self.parser.add_argument('--lambda_rec', type=float, default=10, help='weight for reconstruction loss')
@@ -105,25 +102,31 @@ class TrainArguments(Arguments):
         self.parser.add_argument('--print_freq', type=int, default=1000, help='frquency at which the logs have to be printed to console')
         self.parser.add_argument('--save_freq', type=int, default=1000, help='frequency at which the model checkpoint has to be saved')
         self.parser.add_argument('--display_freq', type=int, default=1000, help='frequency at which the images are to be saved')
+        self.parser.add_argument('--max_iter', type=float, default=float('inf'), help='maximum number of global iterations to be performed')
         self.parser.add_argument('--train_n_batch', type=float, default=float('inf'), help='max number of batches to train')
         self.parser.add_argument('--gan_mode', type=str, default='vanilla', help='which type of loss to be used for adversarial training')
         self.parser.add_argument('--resume_opt', type=str, default=None, help='path to checkpoint to load for optimizer')
+        self.parser.add_argument('--dec_upsample', type=str, default='conv_transpose', choices=['conv_transpose', 'upsample_conv'],
+                                                                                    help='type of upsample layer to be used in decoder')
+        # discriminator params
+        self.parser.add_argument('--ms_dis', action='store_true', help='use multiscale discriminator instead of the normal discriminator')
+        self.parser.add_argument('--dis_sn', action='store_true', help='use spectral normalization in discriminator')
+        self.parser.add_argument('--num_scales', type=int, default=3, help='number of downsampling to be performed in ms discriminator')
         # perceptual loss parameters
-        self.parser.add_argument('--lambda_perceptual', type=float, default=10, help='weight for perceptual loss for Generator')
+        self.parser.add_argument('--lambda_perceptual', type=float, default=5.0, help='weight for perceptual loss for Generator')
+        self.parser.add_argument('--vgg_type', type=str, default=None, help='vgg model to be used to calculate perceptual loss')
         self.parser.add_argument('--vgg_loss', type=str, default=None, help='loss to be used to calculate perceptual loss')
-        self.parser.add_argument('--vgg_checkpoint', type=str, default=None, help='path to pretrained vgg checkpoint')
-        self.parser.add_argument('--no_vgg_instance', action='store_false', help='weather to use vgg instance or not')
-        self.parser.add_argument('--vgg_layers', type=int, nargs='+', default=[2, 7, 12, 21, 30], help='layers to consider for perceptual loss')
+        self.parser.add_argument('--vgg_layers', type=str, nargs='+', default=['conv5_4'], help='layers to consider for perceptual loss')
 
 class TestArguments(Arguments):
     """arguments specific for test run"""
     def __init__(self):
+        super(TestArguments, self).__init__()
         self.parser.add_argument('--num', type=int, default=5, help='number of outputs per image')
         self.parser.add_argument('--result_dir', type=str, default='./outputs', help='path for saving result images and models')
-        self.parser.add_argument('--output_format', type=str, default='image', help='type of output format. one of [image, video]')
-        self.parser.add_argument('--video_filename', type=str, default='video.avi', help='name of the video file')
-        self.parser.add_argument('--src_class', type=str, default=None, help='class of input image or video')
-        self.parser.add_argument('--trg_class', type=str, default=None, help='required target class')
+        self.parser.add_argument('--out_fmt', type=str, default='image', help='type of output format. one of [image, video]')
+        self.parser.add_argument('--vid_fname', type=str, default='video.avi', help='name of the video file')
+        self.parser.add_argument('--trg_cls', type=int, default=-1, help='required target class')
 
     def parse(self):
         args = self.parser.parse_args()
@@ -131,13 +134,15 @@ class TestArguments(Arguments):
         # create directories
         os.makedirs(args.result_dir, exist_ok=True)
         # display directory
-        if 'image' in args.output_format:
+        if 'image' in args.out_fmt:
             args.display_dir = os.path.join(args.result_dir, 'images')
-        elif 'video' in args.output_format:
+        elif 'video' in args.out_fmt:
             args.display_dir = os.path.join(args.result_dir, 'videos')
         os.makedirs(args.display_dir, exist_ok=True)
         # set gpu ids
         args.gpu_ids = [int(gpu_id) for gpu_id in args.gpu_ids.split(',') if int(gpu_id) >= 0]
+        # set mode to test
+        args.mode = 'test'
         # print args
         print('\n--- Load test arguments ---')
         for name, value in sorted(arguments.items()):
@@ -145,4 +150,9 @@ class TestArguments(Arguments):
         args.dis_scale = 3
         args.dis_norm = None
         args.dis_sn = False
+        # assign model class
+        args.model = module_to_dict(models)[args.model]
+        print('\n--- Loaded arguments ---')
+        for name, value in sorted(arguments.items()):
+            print('%s: %s' % (str(name), str(value)))
         return args
