@@ -4,14 +4,12 @@ import torch
 import random
 import inspect
 import re
-
 import numpy as np
 import matplotlib.cm as cm
 
 from inspect import isclass
 from collections import OrderedDict
 from PIL import Image
-#from scipy.misc import imresize
 
 
 ######################
@@ -98,6 +96,12 @@ def save_image(image_numpy, image_path):
     image_pil = Image.fromarray(image_numpy)
     image_pil.save(image_path)
 
+def save_images(images, names):
+    for img, name in zip(images, names):
+        img = tensor_to_image(img)
+        img = Image.fromarray(img)
+        img.save(name)
+
 def varname(p):
     for line in inspect.getframeinfo(inspect.currentframe().f_back)[3]:
         m = re.search(r'\bvarname\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)', line)
@@ -136,10 +140,7 @@ class AttributeDict(OrderedDict):
         return self.get(attr)
 
     def __setattr__(self, key, value):
-        if isinstance(self.get(key), AverageMeter):
-            self.get(key).update(value)
-        else:
-            self.__setitem__(key, value)
+        self.__setitem__(key, value)
 
     def __setitem__(self, key, value):
         super(AttributeDict, self).__setitem__(key, value)
@@ -147,29 +148,17 @@ class AttributeDict(OrderedDict):
 
     def __delattr__(self, item):
         self.__delitem__(item)
-    
-    def add(self, attr_names):
-        """
-        adds an attribute with AverageMeter value which keeps
-        track of the average, sum and current value.
-        """
-        if not isinstance(attr_names, list):
-            attr_names = [attr_names]
-        
-        for attr in attr_names:
-            assert(isinstance(attr, str))
-            self[attr] = AverageMeter(attr)
 
 class TimerBlock:
     def __init__(self, title):
         print(("{}".format(title)))
 
     def __enter__(self):
-        self.start = time.clock()
+        self.start = time.process_time()
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self.end = time.clock()
+        self.end = time.process_time()
         self.interval = self.end - self.start
 
         if exc_type is not None:
@@ -178,7 +167,7 @@ class TimerBlock:
             self.log("Operation finished\n")
 
     def log(self, string):
-        duration = time.clock() - self.start
+        duration = time.process_time() - self.start
         units = 's'
         if duration > 60:
             duration = duration / 60.
@@ -207,49 +196,3 @@ class AverageMeter(object):
     def __str__(self):
         fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
         return fmtstr.format(**self.__dict__)
-
-class ImagePool():
-    """This class implements an image buffer that stores previously generated images.
-    This buffer enables us to update discriminators using a history of generated images
-    rather than the ones produced by the latest generators.
-    """
-
-    def __init__(self, pool_size):
-        """Initialize the ImagePool class
-        Parameters:
-            pool_size (int) -- the size of image buffer, if pool_size=0, no buffer will be created
-        """
-        self.pool_size = pool_size
-        if self.pool_size > 0:  # create an empty pool
-            self.num_imgs = 0
-            self.images = []
-
-    def query(self, images):
-        """Return an image from the pool.
-        Parameters:
-            images: the latest generated images from the generator
-        Returns images from the buffer.
-        By 50/100, the buffer will return input images.
-        By 50/100, the buffer will return images previously stored in the buffer,
-        and insert the current images to the buffer.
-        """
-        if self.pool_size == 0:  # if the buffer size is 0, do nothing
-            return images
-        return_images = []
-        for image in images:
-            image = torch.unsqueeze(image.data, 0)
-            if self.num_imgs < self.pool_size:   # if the buffer is not full; keep inserting current images to the buffer
-                self.num_imgs = self.num_imgs + 1
-                self.images.append(image)
-                return_images.append(image)
-            else:
-                p = random.uniform(0, 1)
-                if p > 0.5:  # by 50% chance, the buffer will return a previously stored image, and insert the current image into the buffer
-                    random_id = random.randint(0, self.pool_size - 1)  # randint is inclusive
-                    tmp = self.images[random_id].clone()
-                    self.images[random_id] = image
-                    return_images.append(tmp)
-                else:       # by another 50% chance, the buffer will return the current image
-                    return_images.append(image)
-        return_images = torch.cat(return_images, 0)   # collect all the images and return
-        return return_images
