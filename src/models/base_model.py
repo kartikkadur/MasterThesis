@@ -86,8 +86,11 @@ class BaseModel(Model):
             self.classification_loss = nn.BCEWithLogitsLoss().to(self.device)
             self.l1_loss = nn.L1Loss().to(self.device)
             if args.vgg_loss is not None:
-                self.perceptual_loss = loss.VGGPerceptualLoss(args).to(self.device)
+                self.perceptual_loss = loss.VGGPerceptualLoss(args.vgg_layers, args.layer_weights, args.vgg_type,
+                                                                        args.vgg_loss, args.gpu_ids).to(self.device)
         self.print_loss = ['g_adv', 'g_cls', 'l1_cc_rec']
+        if self.args.vgg_loss is not None:
+            self.print_loss += ['g_p', 'g_p2']
 
     def get_z_random(self, bs, latent_dim):
         z = torch.randn(bs, latent_dim).to(self.device)
@@ -308,6 +311,7 @@ class BaseModel(Model):
             loss_g += loss_g_content
         if self.args.vgg_loss is not None:
             loss_g += loss_g_p
+            self.loss.g_p = loss_g_p.item()
         loss_g.backward(retain_graph=True)
 
         self.loss.g_adv = loss_g_adv.item()
@@ -370,6 +374,7 @@ class BaseModel(Model):
         loss_g = loss_z_l1 + loss_g_adv2 + loss_g_cls2
         if self.args.vgg_loss is not None:
             loss_g += loss_g_p
+            self.loss.g_p2 = loss_g_p.item()
         loss_g.backward()
         self.loss.l1_recon_z = loss_z_l1.item()
         self.loss.gan2 = loss_g_adv2.item()

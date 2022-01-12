@@ -15,6 +15,18 @@ from PIL import Image
 ######################
 ### Helper methods ###
 ######################
+
+def get_modules(module, superclass=None, filter=None):
+    if superclass:
+        modules = dict([(x, getattr(module, x)) for x in dir(module)
+                 if isclass(getattr(module, x)) and issubclass(getattr(module, x), superclass)]).keys()
+    else:
+        modules = dict([(x, getattr(module, x)) for x in dir(module)
+                 if isclass(getattr(module, x))]).keys()
+    if filter:
+        modules = [m for m in modules if filter in m]
+    return modules
+
 def module_to_dict(module, exclude=[]):
     return dict([(x, getattr(module, x)) for x in dir(module)
                  if x not in exclude and isclass(getattr(module, x))
@@ -129,11 +141,11 @@ class AttributeDict(OrderedDict):
         super(AttributeDict, self).__init__(*args, **kwargs)
         for arg in args:
             if isinstance(arg, dict):
-                for k, v in arg.iteritems():
+                for k, v in arg.items():
                     self[k] = v
 
         if kwargs:
-            for k, v in kwargs.iteritems():
+            for k, v in kwargs.items():
                 self[k] = v
 
     def __getattr__(self, attr):

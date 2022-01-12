@@ -49,25 +49,34 @@ class GANLoss(nn.Module):
             raise NotImplementedError(f'Loss {loss} is not implemented')
 
     def forward(self, inp, trg_is_real):
-        if trg_is_real:
-            trg = self.ones.expand_as(inp).to(inp.get_device())
+        if self.loss is None:
+            if target_is_real:
+                loss = -inp.mean()
+            else:
+                loss = inp.mean()
         else:
-            trg = self.zeros.expand_as(inp).to(inp.get_device())
-        return self.loss(inp, trg)
+            if trg_is_real:
+                trg = self.ones.expand_as(inp).to(inp.get_device())
+            else:
+                trg = self.zeros.expand_as(inp).to(inp.get_device())
+            loss = self.loss(inp, trg)
+        return loss
 
 class VGGFeatureExtractor(nn.Module):
     """define pretrained vgg19 network for perceptual loss"""
-    def __init__(self, feature_layers, vgg_type='vgg19', requires_grad=False):
+    def __init__(self, feature_layers, vgg_type='vgg19', requires_grad=False, normalized=True):
         super(VGGFeatureExtractor, self).__init__()
-        vgg_net = vgg_net = getattr(vgg, vgg_type)(pretrained=True).features
+        vgg_net = vgg_net = getattr(vgg, vgg_type)(pretrained=True)
+        self.normalized = normalized
         self.names = NAMES[vgg_type.replace('_bn', '')]
-        self.feature_layers = feature_layers
+        self.feature_layers = []
         # max index of layers to be considered in the model
         max_idx = 0
         for v in feature_layers:
             idx = self.names.index(v)
             if idx > max_idx:
                 max_idx = idx
+            self.feature_layers.append(idx)
         self.vgg_net = vgg_net.features[:max_idx + 1]
         # set requires_grad to False
         for param in self.parameters():
@@ -76,36 +85,44 @@ class VGGFeatureExtractor(nn.Module):
         self.register_buffer('mean', torch.Tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
         # the std is for image with range [0, 1]
         self.register_buffer('std', torch.Tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+        # instance norm
+        self.instancenorm = torch.nn.InstanceNorm2d(512, affine=False)
 
     def forward(self, x):
         outputs = []
         x = (x - self.mean) / self.std
         for key, layer in self.vgg_net._modules.items():
             x = layer(x)
-            if key in self.feature_layers:
-                output[key] = x.clone()
+            if int(key) in self.feature_layers:
+                if self.normalized:
+                    outputs.append(self.instancenorm(x))
+                else:
+                    outputs.append(x)
         return outputs
 
 class VGGPerceptualLoss(nn.Module):
-    def __init__(self, args, layer_weight=[1.0]):
+    def __init__(self, layers,
+                       layer_weights,
+                       vgg_type='vgg19',
+                       loss_fn='l1',
+                       gpu_ids=[0]):
         super(VGGPerceptualLoss, self).__init__()
-        self.args = args
-        self.layer_weights = layer_weight
-        if 'mse' in self.args.vgg_loss:
+        self.layer_weights = layer_weights
+        assert len(layer_weights) == len(layers), 'Layer weights has to be provided for each vgg layer selected'
+        if 'mse' in loss_fn:
             self.criterion = torch.nn.MSELoss()
-        elif 'l1' in self.args.vgg_loss:
+        elif 'l1' in loss_fn:
             self.criterion = torch.nn.L1Loss()
         else:
-            raise NotImplemented(f"L1 loss and MSE loss are the supported loss types. Got {self.args.vgg_loss}")
-        self.model = init_net(VGGFeatureExtractor(args.vgg_layers, args.vgg_type, requires_grad=False),
+            raise NotImplemented(f"L1 loss and MSE loss are the supported loss types. Got {loss_fn}")
+        self.model = init_net(VGGFeatureExtractor(layers, vgg_type, requires_grad=False),
                               None,
-                              gpu_ids=args.gpu_ids)
-        self.instancenorm = torch.nn.InstanceNorm2d(512, affine=False)
+                              gpu_ids=gpu_ids)
 
     def forward(self, x, y):
         x = self.model(x)
         y = self.model(y)
         percep_loss = 0.0
-        for k in x.keys():
-            percep_loss += self.criterion(x[k], y[k]) * self.layer_weights[k]
+        for i in range(len(x)):
+            percep_loss += self.criterion(x[i], y[i]) * self.layer_weights[i]
         return percep_loss

@@ -6,18 +6,7 @@ import models
 from inspect import isclass
 from datetime import datetime
 from utils import module_to_dict
-
-
-def get_modules(module, superclass=None, filter=None):
-    if superclass:
-        modules = dict([(x, getattr(module, x)) for x in dir(module)
-                 if isclass(getattr(module, x)) and issubclass(getattr(module, x), superclass)]).keys()
-    else:
-        modules = dict([(x, getattr(module, x)) for x in dir(module)
-                 if isclass(getattr(module, x))]).keys()
-    if filter:
-        modules = [m for m in modules if filter in m]
-    return modules
+from utils import get_modules
 
 class Arguments(object):
     """
@@ -113,8 +102,8 @@ class TrainArguments(Arguments):
         self.parser.add_argument('--dis_sn', action='store_true', help='use spectral normalization in discriminator')
         self.parser.add_argument('--num_scales', type=int, default=3, help='number of downsampling to be performed in ms discriminator')
         # perceptual loss parameters
-        self.parser.add_argument('--lambda_perceptual', type=float, default=10.0, help='weight for perceptual loss for Generator')
-        self.parser.add_argument('--vgg_type', type=str, default=None, help='vgg model to be used to calculate perceptual loss')
+        self.parser.add_argument('--lambda_perceptual', type=float, default=1.0, help='weight for perceptual loss for Generator')
+        self.parser.add_argument('--vgg_type', type=str, default='vgg19', help='vgg model to be used to calculate perceptual loss')
         self.parser.add_argument('--vgg_loss', type=str, default=None, help='loss to be used to calculate perceptual loss')
         self.parser.add_argument('--vgg_layers', type=str, nargs='+', default=['conv5_4'], help='layers to consider for perceptual loss')
         self.parser.add_argument('--layer_weights', type=float, nargs='+', default=[1.0], help='layers to consider for perceptual loss')
