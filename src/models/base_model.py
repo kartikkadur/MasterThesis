@@ -9,8 +9,6 @@ class BaseModel(Model):
     def __init__(self, args):
         super(BaseModel, self).__init__(args)
         self.latent_dim = args.latent_dim
-        # lr for content discriminator
-        lr_dcontent = args.lr/2.5
         if args.concat:
             self.concat = True
         else:
@@ -75,6 +73,8 @@ class BaseModel(Model):
                                                        weight_decay=0.0001)
             # use content discriminator
             if self.args.use_dis_content:
+                # lr for content discriminator
+                lr_dcontent = args.lr/2.5
                 self.model.content_discriminator = networks.ContentDiscriminator(dim=self.model.content_encoder.output_dim, 
                                                                                  num_domains=args.num_domains) 
                 self.optimizer.content_discriminator = torch.optim.Adam(self.model.content_discriminator.parameters(),
@@ -88,9 +88,9 @@ class BaseModel(Model):
             if args.vgg_loss is not None:
                 self.perceptual_loss = loss.VGGPerceptualLoss(args.vgg_layers, args.layer_weights, args.vgg_type,
                                                                         args.vgg_loss, args.gpu_ids).to(self.device)
-        self.print_loss = ['g_adv', 'g_cls', 'l1_cc_rec']
-        if self.args.vgg_loss is not None:
-            self.print_loss += ['g_p', 'g_p2']
+            self.print_loss = ['g_adv', 'g_cls', 'l1_cc_rec']
+            if self.args.vgg_loss is not None:
+                self.print_loss += ['g_p', 'g_p2']
 
     def get_z_random(self, bs, latent_dim):
         z = torch.randn(bs, latent_dim).to(self.device)
@@ -105,28 +105,49 @@ class BaseModel(Model):
         self.img = torch.cat((self.img_a, self.img_b), dim=0)
         self.c_org = torch.cat((self.cls_a, self.cls_b), dim=0)
 
-    def forward(self):
-        z_c = self.model.content_encoder(self.img)
+    def forward_random(self, img, z_r, c_trg):
+        trg = torch.zeros((self.args.num_domains,))
+        trg[c_trg] = 1
+        trg = trg.view(1, trg.size(0)).to(self.device)
+        z_c = self.model.content_encoder(img)
+        img_fake = self.model.decoder(z_c, z_r, trg)
+        return img_fake
+
+    def forward_reference(self, img_src, img_ref, c_trg):
+        trg = torch.zeros((self.args.num_domains,))
+        trg[c_trg] = 1
+        trg = trg.view(1, trg.size(0)).to(self.device)
+        z_c = self.model.content_encoder(img_src)
+        if self.concat:
+            z_s, _, _ = self.model.style_encoder(img_ref, trg)
+        else:
+            z_s = self.model.style_encoder(img_ref, trg)
+        img_fake = self.model.decoder(z_c, z_s, trg)
+        return img_fake
+
+    def forward(self, img, c_org):
+        z_c = self.model.content_encoder(img)
         z_ca, z_cb = torch.split(z_c, self.args.batch_size, dim=0)
         if self.concat:
-            z_s, mu, logvar = self.model.style_encoder(self.img, self.c_org)
+            z_s, mu, logvar = self.model.style_encoder(img, c_org)
         else:
-            z_s = self.model.style_encoder(self.img, self.c_org)
+            z_s = self.model.style_encoder(img, c_org)
         z_sa, z_sb = torch.split(z_s, self.args.batch_size, dim=0)
         z_sr = self.get_z_random(self.args.batch_size, self.args.latent_dim)
         # translation from B -> A
+        cls_a, cls_b = torch.split(c_org, self.args.batch_size, dim=0)
         content = torch.cat((z_cb, z_ca, z_cb), dim=0)
         style = torch.cat((z_sa, z_sa, z_sr), dim=0)
-        trg_cls = torch.cat((self.cls_a, self.cls_a, self.cls_a), dim=0)
+        trg_cls = torch.cat((cls_a, cls_a, cls_a), dim=0)
         fake_imgs = self.model.decoder(content, style, trg_cls)
         img_ba, img_aa, img_br = torch.split(fake_imgs, self.args.batch_size, dim=0)
         # translation from A -> B
         content = torch.cat((z_ca, z_cb, z_ca), dim=0)
         style = torch.cat((z_sb, z_sb, z_sr), dim=0)
-        trg_cls = torch.cat((self.cls_b, self.cls_b, self.cls_b), dim=0)
+        trg_cls = torch.cat((cls_b, cls_b, cls_b), dim=0)
         fake_imgs = self.model.decoder(content, style, trg_cls)
         img_ab, img_bb, img_ar = torch.split(fake_imgs, self.args.batch_size, dim=0)
-        #
+        # concatinate images
         img_fake = torch.cat((img_ba, img_ab), dim=0)
         img_random = torch.cat((img_br, img_ar), dim=0)
         img_self = torch.cat((img_aa, img_bb), dim=0)
@@ -388,7 +409,7 @@ class BaseModel(Model):
         return encoding_loss
 
     def compute_visuals(self):
-        img_fake, img_random, img_self = self.forward()
+        img_fake, img_random, img_self = self.forward(self.img, self.c_org)
         img_fake_a, img_fake_b = torch.split(img_fake, self.args.batch_size, dim=0)
         img_random_a, img_random_b = torch.split(img_random, self.args.batch_size, dim=0)
         img_self_a, img_self_b = torch.split(img_self, self.args.batch_size, dim=0)

@@ -80,10 +80,14 @@ class Model(ABC, nn.Module):
     def load(self, checkpoint, opt_ckpt=None, train=True):
         ckpt = torch.load(checkpoint)
         for net in ckpt:
-            self.model[net].load_state_dict(ckpt[net])
+            if net in self.model.keys():
+                self.model[net].load_state_dict(ckpt[net])
+            else:
+                print(f"Checkpoint for {net} network is not found.")
         if opt_ckpt:
             for opt in opt_ckpt:
-                self.optimizer[opt].load_state_dict(opt_ckpt[opt])
+                if opt in self.optimizer.keys():
+                    self.optimizer[opt].load_state_dict(opt_ckpt[opt])
 
     def save_images(self, ep, it):
         visuals = self.compute_visuals()

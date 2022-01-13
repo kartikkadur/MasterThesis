@@ -8,6 +8,7 @@ from utils import TimerBlock, save_images, tensor_to_image
 from dataset import ImageFolder
 from videoreaders import FrameReader
 from videoreaders import FrameWriter
+from videoreaders import SVOReader
 
 class Sampler(object):
     '''Applies the model to a sample set of images or a video'''
@@ -50,7 +51,7 @@ class Sampler(object):
             block.log("Get transforms")
             transform = self.get_transforms()
             z_random_style = self.model.get_z_random(1, self.args.latent_dim)
-            block.log(f"Saving image into the folder {self.args.display_dir}")
+            block.log(f"Writing video into the directory: {self.args.display_dir}")
             for i, batch in enumerate(self.dataset):
                 if os.path.isdir(self.args.dataroot):
                     img, _ = batch
@@ -58,9 +59,14 @@ class Sampler(object):
                     img = batch
                     img = Image.fromarray(img)
                 # apply transforms
-                img = transform(img)
+                img = transform(img).unsqueeze(0)
                 with torch.no_grad():
-                    imgs = self.model.forward_random(img.unsqueeze(0), z_random_style, trg)
+                    if ref is not None:
+                        ref = Image.open(ref).convert('RGB')
+                        ref = transform(ref).unsqueeze(0)
+                        imgs = self.model.forward_reference(img, ref, trg)
+                    else:
+                        imgs = self.model.forward_random(img, z_random_style, trg)
                     names = [os.path.join(self.args.display_dir, f'image_{trg}_{i}_{j}.png') for j in range(len(imgs))]
                 save_images(imgs, names)
 
@@ -70,25 +76,53 @@ class Sampler(object):
             self.load_video()
             block.log("Get transforms")
             transform = self.get_transforms()
-            block.log(f"Writing video into the directory {self.args.display_dir}")
+            block.log(f"Writing video into the directory: {self.args.display_dir}")
             z_random_style = self.model.get_z_random(1, self.args.latent_dim)
             with FrameWriter(self.args.display_dir, self.args.vid_fname, self.args.out_fmt) as fr:
                 for i, frame in enumerate(self.dataset):
                     frame = Image.fromarray(frame)
-                    frame = transform(frame)
+                    frame = transform(frame).unsqueeze(0)
                     with torch.no_grad():
-                        img = self.model.forward_random(frame.unsqueeze(0), z_random_style, trg)
+                        if ref is not None:
+                            ref = Image.open(ref).convert('RGB')
+                            ref = transform(ref).unsqueeze(0)
+                            img = self.model.forward_reference(frame, ref, trg)
+                        else:
+                            img = self.model.forward_random(frame, z_random_style, trg)
                     img = tensor_to_image(img)
                     fr.write(img, i)
 
+    def generate_from_svo(self, trg, ref=None):
+        with TimerBlock('Generating Images from SVO file') as block:
+            block.log("Get transforms")
+            transform = self.get_transforms()
+            z_random_style = self.model.get_z_random(1, self.args.latent_dim)
+            block.log(f"Writing outputs into the directory: {self.args.display_dir}")
+            with SVOReader(self.args.dataroot, self.args.display_dir, output=self.args.out_fmt) as self.dataset:
+                for i in range(len(self.dataset)):
+                    frame = self.dataset.get_frame()
+                    frame = Image.fromarray(frame)
+                    frame = transform(frame).unsqueeze(0)
+                    with torch.no_grad():
+                        if ref is not None:
+                            ref = Image.open(ref).convert('RGB')
+                            ref = transform(ref).unsqueeze(0)
+                            img = self.model.forward_reference(frame, ref, trg)
+                        else:
+                            img = self.model.forward_random(frame, z_random_style, trg)
+                    self.dataset.write(img, i)
+
     def run(self):
-        self.create_model()
-        if 'image' in self.args.out_fmt:
-            self.generate_image(self.args.trg_cls)
-        else:
-            self.generate_video(self.args.trg_cls)
+        with TimerBlock('Starting sampling') as block:
+            self.create_model()
+            if self.args.dataroot.endswith('.svo'):
+                self.generate_from_svo(self.args.trg_cls)
+            elif 'image' in self.args.out_fmt:
+                self.generate_image(self.args.trg_cls)
+            else:
+                self.generate_video(self.args.trg_cls)
 
 if __name__ == "__main__":
     args = TestArguments().parse()
-    sample = Sampler(args)
-    sample.run()
+    sampler = Sampler(args)
+    sampler.run()

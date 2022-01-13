@@ -1,10 +1,14 @@
-import os
 import sys
-import cv2
+import os
 import enum
 import numpy as np
-#import pyzed.sl as sl
-"""
+import cv2
+try:
+    import pyzed.sl as sl
+except:
+    print('pyzed was not found. Install it before using this module')
+    pass
+
 class Images(enum.Enum):
     LEFT = 0
     RIGHT = 1
@@ -13,22 +17,15 @@ class Images(enum.Enum):
 class SVOReader(object):
     '''Reads a svo encoded video files and returns frames as images/converted video'''
     def __init__(self, fpath, outdir, output='frames', images=Images.LEFT):
-        self.filepath = fpath
         self.outdir = outdir
         self.output = output
         self.images = images
         # create directories
         os.makedirs(self.outdir, exist_ok=True)
-        self.init_camera()
-
-    def __enter__(self):
-        return self
-
-    def init_camera(self):
         # init camera
         self.cam = sl.Camera()
         init_params = sl.InitParameters()
-        init_params.set_from_svo_file(self.filepath)
+        init_params.set_from_svo_file(fpath)
         init_params.svo_real_time_mode = False
         init_params.coordinate_units = sl.UNIT.MILLIMETER
         err = self.cam.open(init_params)
@@ -36,70 +33,73 @@ class SVOReader(object):
             sys.stdout.write(repr(err))
             self.cam.close()
             sys.exit(1)
-        # set image containers
-        self.set_containers()
-
-    def set_containers(self):
+        self.rt_param = sl.RuntimeParameters()
+        self.rt_param.sensing_mode = sl.SENSING_MODE.FILL
         image_size = self.cam.get_camera_information().camera_resolution
         self.width = image_size.width
         self.height = image_size.height
-
-        self.left_image = sl.Mat()
-        self.right_image = sl.Mat()
-        if self.images == Images.LEFT_AND_RIGHT:
-            self.combined_image = np.zeros((self.height, self.width*2, 4), dtype=np.uint8)
-        if 'video' in self.output:
+        if 'video' in output:
             self.video_writer = cv2.VideoWriter(os.path.join(self.outdir, 'video.avi'),
                                        cv2.VideoWriter_fourcc('M', '4', 'S', '2'),
                                        max(self.cam.get_camera_information().camera_fps, 25),
                                        (self.width, self.height))
 
-    def retrieve_images(self):
-        '''retrieves images'''
-        if self.images == Images.LEFT:
-            self.cam.retrieve_image(self.left_image, sl.VIEW.LEFT)
-        elif self.images == Images.RIGHT:
-            self.cam.retrieve_image(self.right_image, sl.VIEW.RIGHT)
-        elif self.images == Images.LEFT_AND_RIGHT:
-            self.cam.retrieve_image(self.left_image, sl.VIEW.LEFT)
-            self.cam.retrieve_image(self.right_image, sl.VIEW.RIGHT)
+    def __enter__(self):
+        return self
 
-    def write_image(self):
-        self.retrieve_images()
-        if self.images == Images.LEFT:
-            cv2.imwrite(os.path.join(self.outdir, 'left_img_'+str(i)+'.png'), self.left_image.get_data())
-        elif self.images == Images.RIGHT:
-            cv2.imwrite(os.path.join(self.outdir, 'right_img_'+str(i)+'.png'), self.right_image.get_data())
-        elif self.images == Images.LEFT_AND_RIGHT:
-            cv2.imwrite(os.path.join(self.outdir, 'left_img_'+str(i)+'.png'), self.left_image.get_data())
-            cv2.imwrite(os.path.join(self.outdir, 'right_img_'+str(i)+'.png'), self.right_image.get_data())
+    def __len__(self):
+        return self.cam.get_svo_number_of_frames()
 
-    def write_video(self):
-        self.retrieve_images()
+    def get_frame(self):
+        image = sl.Mat()
+        if self.cam.grab(self.rt_param) == sl.ERROR_CODE.SUCCESS:
+            svo_position = self.cam.get_svo_position()
+            # retrieve SVO images
+            if self.images == Images.LEFT:
+                self.cam.retrieve_image(image, sl.VIEW.LEFT)
+            elif self.images == Images.RIGHT:
+                self.cam.retrieve_image(image, sl.VIEW.RIGHT)
+            elif self.images == Images.LEFT_AND_RIGHT:
+                left = sl.Mat()
+                right = sl.Mat()
+                image = np.zeros((self.height, self.width*2, 4), dtype=np.uint8)
+                self.cam.retrieve_image(left, sl.VIEW.LEFT)
+                self.cam.retrieve_image(right, sl.VIEW.RIGHT)
+                image[0:self.height, 0:self.width, :] = left.get_data()
+                image[0:, self.width:, :] = right.get_data()
+            if isinstance(image, sl.Mat):
+                image = cv2.cvtColor(image.get_data(), cv2.COLOR_BGR2RGB)
+            else:
+                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        return image
+
+    def write_image(self, image, frame_no):
         if self.images == Images.LEFT:
-            img_rgb = cv2.cvtColor(self.left_image.get_data(), cv2.COLOR_RGBA2RGB)
+            cv2.imwrite(os.path.join(self.outdir, 'left_img_'+str(frame_no)+'.png'), image)
         elif self.images == Images.RIGHT:
-            img_rgb = cv2.cvtColor(self.right_image.get_data(), cv2.COLOR_RGBA2RGB)
+            cv2.imwrite(os.path.join(self.outdir, 'right_img_'+str(frame_no)+'.png'), image)
         elif self.images == Images.LEFT_AND_RIGHT:
-            self.combined_image[0:self.height, 0:self.width, :] = self.left_image.get_data()
-            self.combined_image[0:, self.width:, :] = self.right_image.get_data()
-            img_rgb = cv2.cvtColor(self.combined_image, cv2.COLOR_RGBA2RGB)
+            left_image = image[0:self.height, 0:self.width, :]
+            right_image = image[0:,self.width:, :]
+            cv2.imwrite(os.path.join(self.outdir, 'left_img_'+str(frame_no)+'.png'), left_image)
+            cv2.imwrite(os.path.join(self.outdir, 'right_img_'+str(frame_no)+'.png'), right_image)
+
+    def write_video(self, image):
+        img_rgb = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
         self.video_writer.write(img_rgb)
 
-    def write(self):
-        for i in range(self.cam.get_svo_number_of_frames()):
-            if self.cam.grab(sl.RuntimeParameters()) == sl.ERROR_CODE.SUCCESS:
-                curr_position = self.cam.get_svo_position()
-                if 'image' in self.output:
-                    self.write_image()
-                else:
-                    self.write_video()
+    def write(self, image, frame_no):
+        if 'video' in self.output:
+            self.write_video(image)
+        else:
+            self.write_image(image, frame_no)
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         if 'video' in self.output:
             self.video_writer.release()
         self.cam.close()
         cv2.destroyAllWindows()
-"""
+
 class FrameReader(object):
     """reads the video and returns frames"""
     def __init__(self, fpath):
