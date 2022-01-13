@@ -296,6 +296,7 @@ class BaseModel(Model):
         loss_g_cc = self.l1_loss(img, img_recon) * self.args.lambda_rec
         # perceptual loss
         if self.args.vgg_loss is not None:
+            img_fake = torch.cat((img_ab, img_ba), dim=0)
             loss_g_p = self.perceptual_loss(img, img_fake) * self.args.lambda_perceptual
         # KL loss - z_c
         loss_kl_zc = self._l2_regularize(z_c) * 0.01
@@ -355,9 +356,6 @@ class BaseModel(Model):
             loss_g_adv2 = self.gan_loss(pred_fake, 1)
             # classification
             loss_g_cls2 = self.classification_loss(pred_fake_cls, c_org) * self.args.lambda_cls_G
-        # perceptual
-        if self.args.vgg_loss is not None:
-            loss_g_p =  self.perceptual_loss(img, img_random) * self.args.lambda_perceptual
         # latent regression loss
         if self.concat:
             _, mu2, _= self.model.style_encoder(img_random, c_org)
@@ -370,6 +368,10 @@ class BaseModel(Model):
             loss_z_l1_a = self.l1_loss(z_sr_a, z_sr)
             loss_z_l1_b = self.l1_loss(z_sr_a, z_sr)
         loss_z_l1 = (loss_z_l1_a + loss_z_l1_b) * 10
+        # perceptual
+        if self.args.vgg_loss is not None:
+            img_random = torch.cat((img_ar, img_br), dim=0)
+            loss_g_p =  self.perceptual_loss(img, img_random) * self.args.lambda_perceptual
         # total G loss
         loss_g = loss_z_l1 + loss_g_adv2 + loss_g_cls2
         if self.args.vgg_loss is not None:
