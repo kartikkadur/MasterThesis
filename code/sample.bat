@@ -1,1 +1,0 @@
-python sample.py --dataroot C:\Users\Karthik\Downloads\VID_20200101_151004.mp4 --latent_dim 16 --load_size 288 --crop_size 256 --use_dis_content --concat --resume C:\Users\Karthik\Desktop\Thesis\code\checkpoint\model_epoch_24_1050000.ckpt --trg_cls 3 --out_fmt video
