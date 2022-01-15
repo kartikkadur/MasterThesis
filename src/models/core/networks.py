@@ -15,7 +15,7 @@ class ContentEncoder(nn.Module):
                        padding_type='reflect',
                        bias=True):
         super(ContentEncoder, self).__init__()
-        self.model = []
+        self.model = nn.ModuleList()
         self.model.append(ConvBlock(input_dim, dim, 7, 1, 3, padding_type=padding_type, norm_layer=norm_layer, activation='lrelu', bias=bias))
         for i in range(num_downs):
             self.model.append(ConvBlock(dim, dim * 2, 3, 2, 1, padding_type=padding_type, norm_layer=norm_layer, activation='relu', bias=bias))
@@ -39,7 +39,7 @@ class StyleEncoder(nn.Module):
                        padding_type='reflect',
                        activation='relu'):
         super(StyleEncoder, self).__init__()
-        self.model = []
+        self.model = nn.ModuleList()
         self.model.append(ConvBlock(input_dim+num_domains, dim, 7, 1, padding=3, padding_type=padding_type, activation=activation))
         max_mult=4
         for n in range(num_downs):
@@ -72,7 +72,7 @@ class StyleEncoderConcat(nn.Module):
         if isinstance(activation, str):
             activation = get_activation_layer(activation)
         max_dim_mult = 4
-        self.model = []
+        self.model = nn.ModuleList()
         self.model.append(ConvBlock(input_dim+num_domains, dim, 4, 2, 1, padding_type='reflect', bias=bias))
         for n in range(1, n_blocks):
             in_dim = dim * min(max_dim_mult, n)
@@ -112,10 +112,10 @@ class Decoder(nn.Module):
                        bias=True):
         super(Decoder, self).__init__()
         self.dim_add = dim
-        self.dec1 = []
+        self.dec1 = nn.ModuleList()
         for i in range(n_blocks):
             self.dec1.append(DecResnetBlock(dim, self.dim_add, dropout=dropout))
-        self.dec2 = []
+        self.dec2 = nn.ModuleList()
         self.dec2.append(UpsampleBlock(dim, dim//2, 3, 2, 1, 1, norm_layer='layer', activation='relu', up_type=up_type, bias=bias))
         dim = dim//2
         self.dec2.append(UpsampleBlock(dim, dim//2, 3, 2, 1, 1, norm_layer='layer', activation='relu', up_type=up_type, bias=bias))
@@ -177,7 +177,7 @@ class DecoderConcat(nn.Module):
         super(DecoderConcat, self).__init__()
         self.dec_share = ResnetBlock(dim, dim)
         nch = dim + latent_dim + num_domains
-        self.dec1 = []
+        self.dec1 = nn.ModuleList()
         for i in range(n_blocks):
             self.dec1.append(ResnetBlock(nch, nch, dropout=dropout))
         self.dec1 = nn.Sequential(*self.dec1)
@@ -223,7 +223,7 @@ class Discriminator(nn.Module):
                        num_domains=3,
                        image_size=256):
         super(Discriminator, self).__init__()
-        self.model = []
+        self.model = nn.ModuleList()
         self.model.append(ConvBlock(input_dim, dim, kernel_size=3, stride=2, padding=1, padding_type=padding_type,
                                                         norm_layer=norm_layer, sn=sn, activation=activation, bias=bias))
         nch = dim
@@ -254,15 +254,15 @@ class ContentDiscriminator(nn.Module):
                        activation='lrelu',
                        bias=True):
         super(ContentDiscriminator, self).__init__()
-        layers = []
+        self.model = nn.ModuleList()
         for i in range(3):
-            layers += [ConvBlock(dim, dim, kernel_size=7, stride=2, padding=1, padding_type=padding_type, 
-                                                norm_layer=norm_layer, activation=activation, bias=bias)]
-        layers += [ConvBlock(dim, dim, kernel_size=4, stride=1,
-                            padding=0, padding_type=padding_type, activation=activation, bias=bias)]
-        layers += [nn.Conv2d(dim, num_domains, kernel_size=1, stride=1, padding=0)]
+            self.model.append(ConvBlock(dim, dim, kernel_size=7, stride=2, padding=1, padding_type=padding_type, 
+                                                norm_layer=norm_layer, activation=activation, bias=bias))
+        self.model.append(ConvBlock(dim, dim, kernel_size=4, stride=1,
+                            padding=0, padding_type=padding_type, activation=activation, bias=bias))
+        self.model.append(nn.Conv2d(dim, num_domains, kernel_size=1, stride=1, padding=0))
         self.pool = nn.AdaptiveAvgPool2d(1)
-        self.model = nn.Sequential(*layers)
+        self.model = nn.Sequential(*self.model)
 
     def forward(self, x):
         out = self.model(x)
@@ -283,10 +283,10 @@ class MultiScaleDiscriminator(nn.Module):
         super(MultiScaleDiscriminator, self).__init__()
         self.num_scales = num_scales
         self.downsample = nn.AvgPool2d(3, stride=2, padding=[1, 1], count_include_pad=False)
-        self.model = []
-        self.model += [ConvBlock(input_dim, dim, 4, 2, 1, norm_layer=None, activation=activation, padding_type=padding_type, sn=sn)]
+        self.model = nn.ModuleList()
+        self.model.append(ConvBlock(input_dim, dim, 4, 2, 1, norm_layer=None, activation=activation, padding_type=padding_type, sn=sn))
         for i in range(n_layers - 1):
-            self.model += [ConvBlock(dim, dim * 2, 4, 2, 1, norm_layer=norm_layer, activation=activation, padding_type=padding_type, sn=sn)]
+            self.model.append(ConvBlock(dim, dim * 2, 4, 2, 1, norm_layer=norm_layer, activation=activation, padding_type=padding_type, sn=sn))
             dim *= 2
         self.model = nn.Sequential(*self.model)
         self.dis = nn.Conv2d(dim, 1, 1, 1, 0)
