@@ -9,16 +9,16 @@ from models.core.functions import spectral_norm
 
 class ConvBlock(nn.Module):
     """Convolution block containing conv, norm layer and activation layer"""
-    def __init__(self, input_dim,
-                       output_dim,
-                       kernel_size,
-                       stride=1,
-                       padding=0,
-                       bias=False,
-                       norm_layer=None,
-                       activation=None,
-                       padding_type=None,
-                       sn=False):
+    def __init__(self, input_dim:int,
+                       output_dim:int,
+                       kernel_size:int,
+                       stride:int = 1,
+                       padding:int = 0,
+                       bias:bool = False,
+                       norm_layer:str = None,
+                       activation:str = None,
+                       padding_type:str = None,
+                       sn:bool = False):
         super(ConvBlock, self).__init__()
         self.block = []
         # add padding, norm and activation layers if passed
@@ -47,18 +47,18 @@ class ConvBlock(nn.Module):
 
 class UpsampleBlock(nn.Module):
     """Transpopse Convolution block containing transpose conv, norm layer and activation layer"""
-    def __init__(self, input_dim,
-                       output_dim,
-                       kernel_size,
-                       stride=1,
-                       padding=0,
-                       output_padding=0,
-                       bias=False,
-                       norm_layer=None,
-                       activation=None,
-                       padding_type=None,
-                       sn=False,
-                       up_type='transpose'):
+    def __init__(self, input_dim:int,
+                       output_dim:int,
+                       kernel_size:int,
+                       stride:int = 1,
+                       padding:int = 0,
+                       output_padding:int = 0,
+                       bias:bool = False,
+                       norm_layer:str = None,
+                       activation:str = None,
+                       padding_type:str = None,
+                       sn:bool = False,
+                       up_type:str = 'transpose'):
         super(UpsampleBlock, self).__init__()
         self.block = []
         # add padding, norm and activation layers if passed
@@ -92,12 +92,12 @@ class UpsampleBlock(nn.Module):
 
 class DownResnetBlock(nn.Module):
     """Basic resnet type block with short cut convolution connection"""
-    def __init__(self, input_dim,
-                       output_dim,
-                       norm_layer='instance',
-                       activation='lrelu',
-                       padding_type='reflect',
-                       bias=True):
+    def __init__(self, input_dim:int,
+                       output_dim:int,
+                       norm_layer:str = 'instance',
+                       activation:str = 'lrelu',
+                       padding_type:str = 'reflect',
+                       bias:bool = True):
         super(DownResnetBlock, self).__init__()
         self.conv = []
         if isinstance(norm_layer, str):
@@ -120,12 +120,12 @@ class DownResnetBlock(nn.Module):
 
 class ResnetBlock(nn.Module):
     """resnet block"""
-    def __init__(self, input_dim,
-                       output_dim,
-                       dropout=False,
-                       norm_layer='instance',
-                       padding_type='reflect',
-                       activation='relu'):
+    def __init__(self, input_dim:int,
+                       output_dim:int,
+                       dropout:bool = False,
+                       norm_layer:str = 'instance',
+                       padding_type:str = 'reflect',
+                       activation:str = 'relu'):
         super(ResnetBlock, self).__init__()
         self.model = []
         self.model += [ConvBlock(input_dim, output_dim, 3, 1, 1, padding_type=padding_type, norm_layer=norm_layer, activation=activation)]
@@ -139,12 +139,12 @@ class ResnetBlock(nn.Module):
 
 class AdaINResnetBlock(nn.Module):
     """resnet block"""
-    def __init__(self, input_dim,
-                       output_dim,
-                       dropout=False,
-                       latent_dim=8,
-                       padding_type='reflect',
-                       activation='relu'):
+    def __init__(self, input_dim:int,
+                       output_dim:int,
+                       dropout:bool = False,
+                       latent_dim:int = 256,
+                       padding_type:str = 'reflect',
+                       activation:str = 'relu'):
         super(AdaINResnetBlock, self).__init__()
         self.activation = get_activation_layer(activation)()
         self.conv1 = ConvBlock(input_dim, output_dim, 3, 1, 1, padding_type=padding_type)
@@ -155,24 +155,25 @@ class AdaINResnetBlock(nn.Module):
         else:
             self.dropout = nn.Identity()
 
-    def forward(self, x):
-        h, z = x
-        residual = h
-        out = self.conv1(h)
-        out = self.norm(out, z)
-        out = self.activation(out)
-        out = self.conv2(out)
-        out = self.norm(out, z)
-        out = self.dropout(out)
-        out += residual
-        return out
+    def forward(self, x, z):
+        print(z.shape)
+        residual = x
+        x = self.conv1(x)
+        x = self.norm(x, z)
+        x = self.activation(x)
+        x = self.conv2(x)
+        x = self.norm(x, z)
+        x = self.dropout(x)
+        x += residual
+        return x
 
 class DecResnetBlock(nn.Module):
-    def __init__(self, n_channel,
-                       add_channel,
-                       norm_layer='instance',
-                       padding_type='reflect',
-                       stride=1, dropout=False):
+    def __init__(self, n_channel:int,
+                       add_channel:int,
+                       norm_layer:str = 'instance',
+                       padding_type:str = 'reflect',
+                       stride:int = 1,
+                       dropout:bool = False):
         super(DecResnetBlock, self).__init__()
         self.conv1 = ConvBlock(n_channel, n_channel, 3, stride=stride, padding=1, padding_type=padding_type)
         self.conv2 = ConvBlock(n_channel, n_channel, 3, stride=stride, padding=1, padding_type=padding_type)

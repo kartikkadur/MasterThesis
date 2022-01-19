@@ -25,12 +25,10 @@ class AdaptiveInstanceNorm(nn.Module):
                        num_features):
         super(AdaptiveInstanceNorm, self).__init__()
         self.norm = nn.InstanceNorm2d(num_features, affine=False)
-        self.fc_w = nn.Linear(latent_dim, num_features)
-        self.fc_b = nn.Linear(latent_dim, num_features)
+        self.fc = nn.Linear(latent_dim, num_features*2)
 
     def forward(self, x, z):
-        w = self.fc_w(z)
-        b = self.fc_b(z)
-        w = w.view(x.size(0), x.size(1), 1, 1)
-        b = b.view(x.size(0), x.size(1), 1, 1)
+        h = self.fc(z)
+        h = h.view(h.size(0), h.size(1), 1, 1)
+        w, b = torch.chunk(h, chunks=2, dim=1)
         return w * self.norm(x) + b
