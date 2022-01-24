@@ -20,6 +20,10 @@ class SVOReader(object):
         self.outdir = outdir
         self.output = output
         self.images = images
+        if 'video' in output:
+            self.fname = os.path.basename(fpath).split(".")[0] if 'video' in output else None
+        else:
+            self.outdir = os.path.join(outdir, os.path.basename(fpath).split(".")[0])
         # create directories
         os.makedirs(self.outdir, exist_ok=True)
         # init camera
@@ -39,7 +43,7 @@ class SVOReader(object):
         self.width = image_size.width
         self.height = image_size.height
         if 'video' in output:
-            self.video_writer = cv2.VideoWriter(os.path.join(self.outdir, 'video.avi'),
+            self.video_writer = cv2.VideoWriter(os.path.join(self.outdir, f'{self.fname}.avi'),
                                        cv2.VideoWriter_fourcc('M', '4', 'S', '2'),
                                        max(self.cam.get_camera_information().camera_fps, 25),
                                        (self.width, self.height))
@@ -75,12 +79,16 @@ class SVOReader(object):
 
     def write_image(self, image, frame_no):
         if self.images == Images.LEFT:
+            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
             cv2.imwrite(os.path.join(self.outdir, 'left_img_'+str(frame_no)+'.png'), image)
         elif self.images == Images.RIGHT:
+            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
             cv2.imwrite(os.path.join(self.outdir, 'right_img_'+str(frame_no)+'.png'), image)
         elif self.images == Images.LEFT_AND_RIGHT:
             left_image = image[0:self.height, 0:self.width, :]
             right_image = image[0:,self.width:, :]
+            left_image = cv2.cvtColor(left_image, cv2.COLOR_RGB2BGR)
+            right_image = cv2.cvtColor(right_image, cv2.COLOR_RGB2BGR)
             cv2.imwrite(os.path.join(self.outdir, 'left_img_'+str(frame_no)+'.png'), left_image)
             cv2.imwrite(os.path.join(self.outdir, 'right_img_'+str(frame_no)+'.png'), right_image)
 
@@ -105,12 +113,6 @@ class FrameReader(object):
     def __init__(self, fpath):
         self.filepath = fpath
         self.cam = cv2.VideoCapture(self.filepath)
-        #if self.cam.isOpened():
-        #    self.width  = self.cam.get(cv2.CV_CAP_PROP_FRAME_WIDTH)
-        #    self.height = self.cam.get(cv2.CV_CAP_PROP_FRAME_HEIGHT)
-
-    #def get_dimentaion(self):
-    #    return (self.width, self.height)
 
     def __enter__(self):
         return self
@@ -154,7 +156,7 @@ class FrameWriter(object):
         return self
 
     def write(self, frame, frame_number):
-        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        #frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         if 'video' in self.output:
             self.writer.write(frame)
         else:

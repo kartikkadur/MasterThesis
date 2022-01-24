@@ -93,7 +93,7 @@ class Model(ABC, nn.Module):
         visuals = self.compute_visuals()
         img_filename = os.path.join(self.args.display_dir, f'Epoch_{ep}_gen_{it}.jpg')
         if isinstance(visuals, torch.Tensor):
-            torchvision.utils.save_image(visuals / 2 + 0.5, img_filename, nrow=1)
+            torchvision.utils.save_image(visuals, img_filename, nrow=1)
         else:
             save_image(visuals, img_filename)
 

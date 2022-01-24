@@ -116,5 +116,5 @@ class VGGPerceptualLoss(nn.Module):
             diff = [w * (fx - fy)**2 for w, (fx, fy) in zip(self.layer_weights, norm_fea)]
         else:
             diff = [w * torch.abs(fx - fy) for w, (fx, fy) in zip(self.layer_weights, norm_fea)]
-        res = torch.mean(torch.cat(diff, dim=0))
+        res = torch.mean(torch.tensor([torch.mean(dif) for dif in diff]))
         return res

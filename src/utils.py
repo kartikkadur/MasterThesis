@@ -1,7 +1,6 @@
 import os
 import time
 import torch
-import random
 import inspect
 import re
 import numpy as np
@@ -105,13 +104,14 @@ def save_image(image_numpy, image_path):
     """
     saves image to disc as a PIL image
     """
+    os.makedirs(os.path.dirname(image_path), exist_ok=True)
     image_pil = Image.fromarray(image_numpy)
     image_pil.save(image_path)
 
 def save_images(images, names):
     for img, name in zip(images, names):
-        img = tensor_to_image(img)
-        img = Image.fromarray(img)
+        os.makedirs(os.path.dirname(name), exist_ok=True)
+        img = Image.fromarray(tensor_to_image(img))
         img.save(name)
 
 def varname(p):

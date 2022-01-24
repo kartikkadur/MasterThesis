@@ -61,16 +61,6 @@ class Trainer(object):
             block.log(f'Saving model inside : {self.args.checkpoint_dir}')
             self.model.save(epoch, global_iter)
 
-    def test(self):
-        with TimerBlock('testing model') as block:
-            testset = self.args.dataset(args)
-            test_loader = torch.utils.data.DataLoader(testset)
-            for i, batch in enumerate(test_loader):
-                self.set_inputs(batch)
-                self.model.forward()
-                self.save_images(0, i)
-                self.compute_metrics()
-
     def run(self):
         # create dataset
         self.load_dataset()

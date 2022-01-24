@@ -196,31 +196,23 @@ class MappingNetwork(nn.Module):
         """
         super().__init__()
         self.model = nn.ModuleList()
-        self.model.append(nn.Linear(input_dim, 512))
+        self.model.append(nn.Linear(input_dim + num_domains, 512))
         self.model.append(nn.ReLU())
         for _ in range(3):
             self.model.append(nn.Linear(512, 512))
             self.model.append(nn.ReLU())
+        self.model.append(nn.Sequential(nn.Linear(512, 512),
+                                        nn.ReLU(),
+                                        nn.Linear(512, 512),
+                                        nn.ReLU(),
+                                        nn.Linear(512, 512),
+                                        nn.ReLU(),
+                                        nn.Linear(512, output_dim)))
         self.model = nn.Sequential(*self.model)
 
-        self.fc = nn.ModuleList()
-        for _ in range(num_domains):
-            self.fc.append(nn.Sequential(nn.Linear(512, 512),
-                                            nn.ReLU(),
-                                            nn.Linear(512, 512),
-                                            nn.ReLU(),
-                                            nn.Linear(512, 512),
-                                            nn.ReLU(),
-                                            nn.Linear(512, output_dim))) 
-
     def forward(self, z, c):
-        h = self.model(z)
-        out = []
-        for module in self.fc:
-            out.append(module(h))
-        out = torch.stack(out, dim=1)
-        idx = torch.LongTensor(range(c.size(0))).to(c.device)
-        z_style = out[idx, c]
+        z_c = torch.cat([c, z], dim=1)
+        z_style = self.model(z_c)
         return z_style
 
 class Decoder(nn.Module):

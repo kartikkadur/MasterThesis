@@ -4,125 +4,123 @@ import torch
 from torchvision import transforms
 from PIL import Image
 from arguments import TestArguments
-from utils import TimerBlock, save_images, tensor_to_image
-from dataset import ImageFolder
-from videoreaders import FrameReader
+from utils import TimerBlock, save_images
+from dataset import ImageList
+from dataset import VideoDataset
 from videoreaders import FrameWriter
 from videoreaders import SVOReader
 
+DOMAIN_MAP = ['cloud', 'fog', 'rain', 'sun']
+
 class Sampler(object):
     '''Applies the model to a sample set of images or a video'''
-    def __init__(self, args):
-        self.args = args
-        self.args.num_domains=5
+    def __init__(self):
+        self.dataset_type = None
+        self.transforms = self.get_transforms()
 
-    def load_image(self):
-        with TimerBlock('Loading data') as block:
-            self.dataset = ImageFolder(self.args)
-            block.log('Create dataloader')
+    def load_image_dataset(self, args):
+        with TimerBlock('Loading image dataset') as block:
+            dataset = ImageList(args.dataroot, transform=self.transforms)
+            block.log('Creating dataloader')
+            return dataset
 
-    def load_video(self):
+    def load_video_dataset(self, args):
         with TimerBlock('Loading data') as block:
-            block.log(f"Loading data from {self.args.dataroot}")
-            self.dataset = FrameReader(self.args.dataroot)
+            block.log(f"Loading data from {args.dataroot}")
+            dataset = VideoDataset(args.dataroot, transform=self.transforms)
+            return dataset
+
+    def load_dataset(self, args):
+        with TimerBlock("Loading Dataset") as block:
+            if os.path.isdir(args.dataroot):
+                block.log('Load image dataset')
+                dataset = self.load_image_dataset(args)
+            else:
+                block.log('Load video dataset')
+                dataset = self.load_video_dataset(args)
+            dataloader = torch.utils.data.DataLoader(dataset,
+                                                     batch_size=args.batch_size,
+                                                     num_workers=args.num_workers,
+                                                     drop_last=True)
+        return dataloader
 
     def get_transforms(self):
-        transform = [transforms.Resize((self.args.crop_size, self.args.crop_size), Image.BICUBIC)]
+        transform = [transforms.Resize((300,300))]
         transform.append(transforms.ToTensor())
         transform.append(transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]))
         return transforms.Compose(transform)
 
-    def create_model(self):
+    def load_model(self, args):
         with TimerBlock('Creating model') as block:
-            self.model = self.args.model(self.args)
+            model = args.model(args)
             block.log('Initialize model')
-            self.model.initialize()
-            if self.args.resume:
+            model.initialize()
+            if args.resume:
                 block.log('Load pretrained weights')
-                self.model.load(self.args.resume)
+                model.load(args.resume)
+            return model, model.device
 
-    def generate_image(self, trg=None, ref=None):
-        with TimerBlock('Generating Images') as block:
-            block.log('Load image dataset')
-            if os.path.isdir(self.args.dataroot):
-                self.load_image()
-            else:
-                self.load_video()
-            block.log("Get transforms")
-            transform = self.get_transforms()
-            z_random_style = self.model.get_z_random(1, self.args.latent_dim)
-            block.log(f"Writing video into the directory: {self.args.display_dir}")
-            for i, batch in enumerate(self.dataset):
-                if os.path.isdir(self.args.dataroot):
-                    img, _ = batch
-                else:
-                    img = batch
-                    img = Image.fromarray(img)
-                # apply transforms
-                img = transform(img).unsqueeze(0)
-                with torch.no_grad():
-                    if ref is not None:
-                        ref = Image.open(ref).convert('RGB')
-                        ref = transform(ref).unsqueeze(0)
-                        imgs = self.model.forward_reference(img, ref, trg)
+    def load_image(self, args, img, device):
+        img = Image.open(img).convert('RGB')
+        img = self.transforms(img)
+        if img.dim() == 3:
+            img = img.unsqueeze(0)
+            img = img.repeat((args.batch_size, 1, 1, 1))
+        return img.to(device)
+
+    def load_target(self, args, trg, device):
+        """loads one hot target"""
+        onehot = torch.zeros((args.batch_size, args.num_domains))
+        onehot[:, torch.tensor(trg, dtype=torch.long)] = 1
+        return onehot.to(device)
+
+    @torch.no_grad()
+    def sample_batch(self, args, model, batch, trg, ref=None, z_sr=None, device=torch.device('cpu')):
+        # load target tensor
+        trg_t = self.load_target(args, trg, device)
+        # load the reference image specific to target
+        if ref is not None:
+            ref = self.load_image(args, ref, device)
+            imgs = model.forward_reference(batch, ref, trg_t)
+        elif z_sr is not None:
+            imgs = model.forward_random(batch, z_sr, trg_t)
+        else:
+            raise ValueError('One of ref or z_sr values has to be provided.')
+        return imgs
+
+    def sample(self, args, model, dataloader, trgs=None, refs=None, device=torch.device('cpu')):
+        with TimerBlock('Running model') as block:
+            # get random style vector
+            z_sr = model.get_z_random(args.batch_size, args.latent_dim)
+            # set targets to all possible targets for random generation
+            if trgs is None:
+                trgs = range(args.num_domains)
+            # check if the refs are provided
+            if refs is not None and trgs is not None:
+                assert len(trgs) == len(refs), "target and reference should match the shape"
+            # loop over all the targets and all the images
+            for trg in trgs:
+                for i, batch in enumerate(dataloader):
+                    if refs is not None:
+                        ref = refs[trg]
+                        imgs = self.sample_batch(args, model, batch, trg, ref, device=device)
                     else:
-                        imgs = self.model.forward_random(img, z_random_style, trg)
-                    names = [os.path.join(self.args.display_dir, f'image_{trg}_{i}_{j}.png') for j in range(len(imgs))]
-                save_images(imgs, names)
-
-    def generate_video(self, trg, ref=None):
-        with TimerBlock("Generating Video") as block:
-            block.log("Loading video dataset")
-            self.load_video()
-            block.log("Get transforms")
-            transform = self.get_transforms()
-            block.log(f"Writing video into the directory: {self.args.display_dir}")
-            z_random_style = self.model.get_z_random(1, self.args.latent_dim)
-            with FrameWriter(self.args.display_dir, self.args.vid_fname, self.args.out_fmt) as fr:
-                for i, frame in enumerate(self.dataset):
-                    frame = Image.fromarray(frame)
-                    frame = transform(frame).unsqueeze(0)
-                    with torch.no_grad():
-                        if ref is not None:
-                            ref = Image.open(ref).convert('RGB')
-                            ref = transform(ref).unsqueeze(0)
-                            img = self.model.forward_reference(frame, ref, trg)
-                        else:
-                            img = self.model.forward_random(frame, z_random_style, trg)
-                    img = tensor_to_image(img)
-                    fr.write(img, i)
-
-    def generate_from_svo(self, trg, ref=None):
-        with TimerBlock('Generating Images from SVO file') as block:
-            block.log("Get transforms")
-            transform = self.get_transforms()
-            z_random_style = self.model.get_z_random(1, self.args.latent_dim)
-            block.log(f"Writing outputs into the directory: {self.args.display_dir}")
-            with SVOReader(self.args.dataroot, self.args.display_dir, output=self.args.out_fmt) as self.dataset:
-                for i in range(len(self.dataset)):
-                    frame = self.dataset.get_frame()
-                    frame = Image.fromarray(frame)
-                    frame = transform(frame).unsqueeze(0)
-                    with torch.no_grad():
-                        if ref is not None:
-                            ref = Image.open(ref).convert('RGB')
-                            ref = transform(ref).unsqueeze(0)
-                            img = self.model.forward_reference(frame, ref, trg)
-                        else:
-                            img = self.model.forward_random(frame, z_random_style, trg)
-                    self.dataset.write(img, i)
+                        imgs = self.sample_batch(args, model, batch, trg, z_sr=z_sr, device=device)
+                    names = [os.path.join(args.display_dir, str(trg), f'image{i}_{j}.jpg') for j in range(len(imgs))]
+                    save_images(imgs, names)
 
     def run(self):
         with TimerBlock('Starting sampling') as block:
-            self.create_model()
-            if self.args.dataroot.endswith('.svo'):
-                self.generate_from_svo(self.args.trg_cls)
-            elif 'image' in self.args.out_fmt:
-                self.generate_image(self.args.trg_cls)
-            else:
-                self.generate_video(self.args.trg_cls)
+            # load arguments
+            args = TestArguments().parse()
+            # load model
+            model, device = self.load_model(args)
+            # load dataset
+            dataloader = self.load_dataset(args)
+            # run sample method
+            args.targets = [DOMAIN_MAP.index(t) for t in args.targets]
+            self.sample(args, model, dataloader, args.targets, args.reference, device)
 
 if __name__ == "__main__":
-    args = TestArguments().parse()
-    sampler = Sampler(args)
+    sampler = Sampler()
     sampler.run()

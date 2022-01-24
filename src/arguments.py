@@ -80,8 +80,11 @@ class TrainArguments(Arguments):
         super(TrainArguments, self).__init__()
         self.parser.add_argument('--gen_norm', type=str, default=None, choices=['batch','instance'], help='normalization layer in generator')
         self.parser.add_argument('--dis_norm', type=str, default=None, choices=['batch','instance'], help='normalization layer in discriminator')
+        # optimizer paramerets
         self.parser.add_argument('--lr', type=float, default=0.0001, help='learning rate parameter')
         self.parser.add_argument('--wd', type=float, default=0.0001, help='weight decay parameter')
+        self.parser.add_argument('--beta1', type=float, default=0.5, help='beta1 for adam optimizer')
+        self.parser.add_argument('--beta2', type=str, default=0.999, help='beta2 for adam optimizer')
         self.parser.add_argument('--lr_policy', type=str, default='lambda', help='type of learn rate decay')
         self.parser.add_argument('--n_epoch', type=int, default=200, help='number of epochs to train')
         self.parser.add_argument('--start_epoch', type=int, default=1, help='start epoch number')
@@ -90,6 +93,7 @@ class TrainArguments(Arguments):
         self.parser.add_argument('--lambda_rec', type=float, default=10, help='weight for reconstruction loss')
         self.parser.add_argument('--lambda_cls', type=float, default=1.0, help='weight for classification loss for Discriminator')
         self.parser.add_argument('--lambda_cls_G', type=float, default=5.0, help='weight for classification loss for Generator')
+        self.parser.add_argument('--lambda_style', type=float, default=5.0, help='weight for style reconstruction loss')
         self.parser.add_argument('--print_freq', type=int, default=1000, help='frquency at which the logs have to be printed to console')
         self.parser.add_argument('--save_freq', type=int, default=1000, help='frequency at which the model checkpoint has to be saved')
         self.parser.add_argument('--display_freq', type=int, default=1000, help='frequency at which the images are to be saved')
@@ -116,8 +120,10 @@ class TestArguments(Arguments):
         self.parser.add_argument('--result_dir', type=str, default='./outputs', help='path for saving result images and models')
         self.parser.add_argument('--out_fmt', type=str, default='image', help='type of output format. one of [image, video]')
         self.parser.add_argument('--vid_fname', type=str, default='video.avi', help='name of the video file')
-        self.parser.add_argument('--reference', type=str, default=None, help='path to the reference image for extracting the style from')
-        self.parser.add_argument('--trg_cls', type=int, default=-1, help='required target class')
+        self.parser.add_argument('--reference', type=str, nargs='+', default=None, help='path to the reference image for extracting the style from')
+        self.parser.add_argument('--targets', type=str, nargs='+', default=None, help='required target class')
+        self.parser.add_argument('--multi_iter', type=int, default=0, help='apply random styles to multiple iterations')
+        self.parser.add_argument('--save_visuals', action='store_true', help='save visuals for presentation')
 
     def parse(self):
         args = self.parser.parse_args()

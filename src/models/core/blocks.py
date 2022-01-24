@@ -156,7 +156,6 @@ class AdaINResnetBlock(nn.Module):
             self.dropout = nn.Identity()
 
     def forward(self, x, z):
-        print(z.shape)
         residual = x
         x = self.conv1(x)
         x = self.norm(x, z)
