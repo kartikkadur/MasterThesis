@@ -66,12 +66,13 @@ class StyleEncoder(nn.Module):
         self.model = nn.ModuleList()
         self.model.append(ConvBlock(input_dim+num_domains, dim, 7, 1, padding=3, 
                                     padding_type=padding_type, activation=activation))
-        max_mult=4
+        max_filter_size=256
         for n in range(num_downs):
-            in_dim = dim * min(max_mult, 2**n)
-            out_dim = dim * min(max_mult, 2**(n+1))
+            in_dim = min(max_filter_size, dim)
+            out_dim = min(max_filter_size, dim*2)
             self.model.append(ConvBlock(in_dim, out_dim, 4, 2, padding=1,
                                         padding_type=padding_type, activation=activation))
+            dim *= 2
         self.model.append(nn.AdaptiveAvgPool2d(1))
         self.model.append(nn.Conv2d(out_dim, output_dim, 1, 1, 0))
         self.model = nn.Sequential(*self.model)
@@ -111,13 +112,14 @@ class StyleEncoderConcat(nn.Module):
             norm_layer = get_norm_layer(norm_layer)
         if isinstance(activation, str):
             activation = get_activation_layer(activation)
-        max_dim_mult = 4
+        max_filter_size = 256
         self.model = nn.ModuleList()
         self.model.append(ConvBlock(input_dim+num_domains, dim, 4, 2, 1, padding_type='reflect', bias=bias))
         for n in range(1, n_blocks):
-            in_dim = dim * min(max_dim_mult, n)
-            out_dim = dim * min(max_dim_mult, n+1)
+            in_dim = min(max_filter_size, dim)
+            out_dim = min(max_filter_size, dim*2)
             self.model.append(DownResnetBlock(in_dim, out_dim, norm_layer, activation, bias=bias))
+            dim *= 2
         self.model.append(activation())
         self.model.append(nn.AdaptiveAvgPool2d(1))
         self.model = nn.Sequential(*self.model)

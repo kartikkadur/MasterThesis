@@ -57,14 +57,14 @@ def get_padding_layer(padding_type=None):
         raise ValueError(f"parameter type of padding_type should be one of 'str' or 'nn.Module', but got {type(padding_type)}.")
     return padding_layer
 
-def get_scheduler(optimizer, args, cur_ep=-1):
+def get_scheduler(optimizer, args, cur_it=-1):
     if args.lr_policy == 'lambda':
-        def lambda_rule(ep):
-            lr_l = 1.0 - max(0, ep - args.n_epoch_decay) / float(args.n_epoch - args.n_epoch_decay + 1)
+        def lambda_rule(it):
+            lr_l = 1.0 - max(0, it - args.n_iter_decay) / float(args.n_iters - args.n_iter_decay + 1)
             return lr_l
-        scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda_rule, last_epoch=cur_ep)
+        scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda_rule, last_epoch=cur_it)
     elif args.lr_policy == 'step':
-        scheduler = lr_scheduler.StepLR(optimizer, step_size=args.n_ep_decay, gamma=0.1, last_epoch=cur_ep)
+        scheduler = lr_scheduler.StepLR(optimizer, step_size=args.n_iter_decay, gamma=0.1, last_epoch=cur_it)
     else:
         raise NotImplementedError(f'Learning rate policy {args.lr_policy} is not implemented')
     return scheduler

@@ -99,7 +99,8 @@ class VGGPerceptualLoss(nn.Module):
                        layer_weights,
                        vgg_type='vgg19',
                        loss_fn='l2',
-                       gpu_ids=[0]):
+                       gpu_ids=[0],
+                       norm_feat=True):
         super(VGGPerceptualLoss, self).__init__()
         self.layer_weights = layer_weights
         assert len(layer_weights) == len(layers), 'Layer weights has to be provided for each vgg layer selected'
@@ -107,14 +108,18 @@ class VGGPerceptualLoss(nn.Module):
         self.model = init_net(VGGFeatureExtractor(layers, vgg_type, requires_grad=False),
                               None,
                               gpu_ids=gpu_ids)
+        self.norm_feat = norm_feat
         self.instancenorm = nn.InstanceNorm2d(512, affine=False)
 
     def forward(self, x, y):
         fea_x, fea_y = self.model(x), self.model(y)
-        norm_fea = [(self.instancenorm(fx), self.instancenorm(fy)) for fx, fy in zip(fea_x, fea_y)]
+        if self.norm_feat:
+            norm_fea = [(self.instancenorm(fx), self.instancenorm(fy)) for fx, fy in zip(fea_x, fea_y)]
+        else:
+            norm_fea = [(fx, fy) for fx, fy in zip(fea_x, fea_y)]
         if 'mse' in self.loss_type or 'l2' in self.loss_type:
             diff = [w * (fx - fy)**2 for w, (fx, fy) in zip(self.layer_weights, norm_fea)]
         else:
             diff = [w * torch.abs(fx - fy) for w, (fx, fy) in zip(self.layer_weights, norm_fea)]
-        res = torch.mean(torch.tensor([torch.mean(dif) for dif in diff]))
+        res = torch.sum(torch.tensor([torch.mean(dif) for dif in diff]))
         return res

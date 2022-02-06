@@ -177,12 +177,18 @@ class DecResnetBlock(nn.Module):
         self.conv1 = ConvBlock(n_channel, n_channel, 3, stride=stride, padding=1, padding_type=padding_type)
         self.conv2 = ConvBlock(n_channel, n_channel, 3, stride=stride, padding=1, padding_type=padding_type)
         self.norm = get_norm_layer(norm_layer)(n_channel)
-        block1 = [ConvBlock(n_channel + add_channel, n_channel + add_channel, 1, stride=stride, padding=0, activation='relu')]
-        block1 += [ConvBlock(n_channel + add_channel, n_channel, 1, stride=1, padding=0, activation='relu')]
-        self.block1 = nn.Sequential(*block1)
-        block2 = [ConvBlock(n_channel + add_channel, n_channel + add_channel, 1, stride=1, padding=0, activation='relu')]
-        block2 += [ConvBlock(n_channel + add_channel, n_channel, 1, stride=1, padding=0, activation='relu')]
-        self.block2 = nn.Sequential(*block2)
+        self.block1 = nn.ModuleList()
+        self.block1.append(nn.Conv2d(n_channel + add_channel, n_channel + add_channel, 1, stride=stride, padding=0))
+        self.block1.append(nn.ReLU())
+        self.block1.append(nn.Conv2d(n_channel + add_channel, n_channel, 1, stride=1, padding=0))
+        self.block1.append(nn.ReLU())
+        self.block1 = nn.Sequential(*self.block1)
+        self.block2 = nn.ModuleList()
+        self.block2.append(nn.Conv2d(n_channel + add_channel, n_channel + add_channel, 1, stride=1, padding=0))
+        self.block2.append(nn.ReLU())
+        self.block2.append(nn.Conv2d(n_channel + add_channel, n_channel, 1, stride=1, padding=0))
+        self.block2.append(nn.ReLU())
+        self.block2 = nn.Sequential(*self.block2)
         if dropout:
             self.dropout = nn.Dropout(0.5)
         else:

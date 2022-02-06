@@ -15,7 +15,8 @@ class BaseModel(Model):
             self.concat = False
         # create models
         self.model.content_encoder = networks.ContentEncoder(args.input_dim,
-                                                             dim=args.dim)
+                                                             dim=args.dim,
+                                                             norm_layer=args.enc_norm)
         if self.concat:
             self.model.style_encoder = networks.StyleEncoderConcat(args.input_dim,
                                                                    output_dim=self.latent_dim,
@@ -28,16 +29,20 @@ class BaseModel(Model):
                                                         num_domains=args.num_domains,
                                                         latent_dim=self.latent_dim,
                                                         up_type=args.up_type,
+                                                        norm_layer=args.dec_norm,
                                                         dropout=args.use_dropout)
         else:
             self.model.style_encoder = networks.StyleEncoder(args.input_dim,
                                                              output_dim=self.latent_dim,
                                                              dim=args.dim, 
-                                                             num_domains=args.num_domains)
+                                                             num_domains=args.num_domains,
+                                                             activation='lrelu')
             self.model.decoder = networks.Decoder(args.input_dim,
                                                   dim=self.model.content_encoder.output_dim,
                                                   latent_dim=self.latent_dim,
                                                   num_domains=args.num_domains,
+                                                  up_type=args.up_type,
+                                                  norm_layer=args.dec_norm,
                                                   dropout=args.use_dropout)
         # create discriminators, optimizers and loss only while training
         if 'train' in args.mode:
@@ -87,7 +92,7 @@ class BaseModel(Model):
             self.l1_loss = nn.L1Loss().to(self.device)
             if args.vgg_loss is not None:
                 self.perceptual_loss = loss.VGGPerceptualLoss(args.vgg_layers, args.layer_weights, args.vgg_type,
-                                                                        args.vgg_loss, args.gpu_ids).to(self.device)
+                                                                        args.vgg_loss, args.gpu_ids, args.norm_feat).to(self.device)
             self.print_loss = ['g_adv', 'g_cls', 'l1_cc_rec']
             if self.args.vgg_loss is not None:
                 self.print_loss += ['g_p', 'g_p2']
@@ -315,7 +320,7 @@ class BaseModel(Model):
             loss_g_p = self.perceptual_loss(img, img_fake) * self.args.lambda_perceptual
         # KL loss - z_c
         loss_kl_zc = self._l2_regularize(z_c) * 0.01
-        # KL loss - z_a
+        # KL loss - z_s
         if self.concat:
             kl_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
             loss_kl_zs = torch.sum(kl_element).mul_(-0.5) * 0.01

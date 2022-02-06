@@ -99,10 +99,10 @@ class Sampler(object):
             if refs is not None and trgs is not None:
                 assert len(trgs) == len(refs), "target and reference should match the shape"
             # loop over all the targets and all the images
-            for trg in trgs:
+            for t, trg in enumerate(trgs):
                 for i, batch in enumerate(dataloader):
                     if refs is not None:
-                        ref = refs[trg]
+                        ref = refs[t]
                         imgs = self.sample_batch(args, model, batch, trg, ref, device=device)
                     else:
                         imgs = self.sample_batch(args, model, batch, trg, z_sr=z_sr, device=device)
@@ -119,6 +119,7 @@ class Sampler(object):
             dataloader = self.load_dataset(args)
             # run sample method
             args.targets = [DOMAIN_MAP.index(t) for t in args.targets]
+            print(args.targets)
             self.sample(args, model, dataloader, args.targets, args.reference, device)
 
 if __name__ == "__main__":

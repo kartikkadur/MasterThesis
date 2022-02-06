@@ -40,18 +40,21 @@ class Model(ABC, nn.Module):
         pass
 
     def initialize(self):
-        if self.args.resume:
-            init_type = None
-        else:
-            init_type = 'normal'
+        init_type = None if self.args.resume else self.args.init_type
+        # initialize model
         for net in self.model:
             self.model[net] = init_net(self.model[net], init_type=init_type, gpu_ids=self.args.gpu_ids, device=self.device)
+        # load checkpoint if provided
+        if self.args.resume or self.args.resume_opt:
+            self.load(self.args.resume, self.args.resume_opt)
+        # initialize lr scheduler
+        self.args.last_iter = -1 if self.args.resume_opt is None else self.args.last_iter
+        if 'train' in self.args.mode:
+            self.init_scheduler()
 
-    def init_scheduler(self, args):
+    def init_scheduler(self):
         for opt in self.optimizer:
-            self.scheduler[opt] = get_scheduler(self.optimizer[opt], args, -1)
-        for i in range(self.args.start_epoch):
-            self.update_lr()
+            self.scheduler[opt] = get_scheduler(self.optimizer[opt], self.args, self.args.last_iter)
 
     def get_current_lr(self):
         curr_lrs = {}
@@ -63,37 +66,43 @@ class Model(ABC, nn.Module):
         for net in self.model:
             self.scheduler[net].step()
 
-    def save(self, ep, it):
+    def save(self, it):
         model_state = {}
         opt_state = {}
         # model state
         for net in self.model:
             model_state[net] = self.model[net].state_dict()
-        path = os.path.join(self.args.checkpoint_dir, f"model_epoch_{ep}_{it}.ckpt")
+        path = os.path.join(self.args.checkpoint_dir, f"model_{it}.ckpt")
         torch.save(model_state, path)
         # opt state
         for opt in self.optimizer:
             opt_state[opt] = self.optimizer[opt].state_dict()
-        path = os.path.join(self.args.checkpoint_dir, f"opt_epoch_{ep}_{it}.ckpt")
+        path = os.path.join(self.args.checkpoint_dir, f"opt_{it}.ckpt")
         torch.save(opt_state, path)
 
-    def load(self, checkpoint, opt_ckpt=None, train=True):
-        ckpt = torch.load(checkpoint)
-        for net in ckpt:
-            if net in self.model.keys():
-                self.model[net].load_state_dict(ckpt[net])
-            else:
-                print(f"Checkpoint for {net} network is not found.")
-        if opt_ckpt:
-            for opt in opt_ckpt:
+    def load(self, checkpoint, opt_ckpt=None):
+        if checkpoint is not None:
+            ckpt = torch.load(checkpoint)
+            for net in ckpt:
+                if net in self.model.keys():
+                    print(f"Loading checkpoint for : {net}")
+                    self.model[net].load_state_dict(ckpt[net])
+                else:
+                    print(f"Checkpoint for {net} network is not found.")
+        if opt_ckpt is not None:
+            ckpt = torch.load(opt_ckpt)
+            for opt in ckpt:
                 if opt in self.optimizer.keys():
-                    self.optimizer[opt].load_state_dict(opt_ckpt[opt])
+                    print(f"Loading checkpoint for {opt} optimizer.")
+                    self.optimizer[opt].load_state_dict(ckpt[opt])
+                else:
+                    print(f"Checkpoint for {opt} optimizer is not found.")
 
-    def save_images(self, ep, it):
+    def save_images(self, it):
         visuals = self.compute_visuals()
-        img_filename = os.path.join(self.args.display_dir, f'Epoch_{ep}_gen_{it}.jpg')
+        img_filename = os.path.join(self.args.display_dir, f'gen_{it}.jpg')
         if isinstance(visuals, torch.Tensor):
-            torchvision.utils.save_image(visuals, img_filename, nrow=1)
+            torchvision.utils.save_image(visuals / 2 + 0.5, img_filename, nrow=1)
         else:
             save_image(visuals, img_filename)
 

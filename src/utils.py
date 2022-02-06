@@ -37,60 +37,60 @@ def param_to_str(**kwargs):
     """
     return str([f"{key}: {value}" for key, value in kwargs.items()]).strip('[]')
 
+@torch.no_grad()
+def make_grid(tensor, nrow=1):
+    """
+    makes a grid from the tensor.
+    code adapted from pytorch's official code :
+    https://pytorch.org/vision/stable/_modules/torchvision/utils.html
+    """
+    if not (isinstance(tensor, torch.Tensor) or
+            (isinstance(tensor, list) and all(isinstance(t, torch.Tensor) for t in tensor))):
+        raise TypeError(f'tensor or list of tensors expected, got {type(tensor)}')
+    if isinstance(tensor, list):
+        tensor = torch.stack(tensor, dim=0)
+    if tensor.dim() == 2:
+        tensor = tensor.unsqueeze(0)
+    if tensor.dim() == 3:
+        if tensor.size(0) == 1:
+            tensor = torch.cat((tensor, tensor, tensor), 0)
+        tensor = tensor.unsqueeze(0)
+    batch = tensor.size(0)
+    nrows = min(nrow, batch)
+    ncols = int(np.ceil(float(batch) / nrows))
+    height, width = int(tensor.size(2)), int(tensor.size(3))
+    num_channels = tensor.size(1)
+    grid = tensor.new_full((num_channels, height * ncols, width * nrows), 0)
+    k = 0
+    for y in range(ncols):
+        for x in range(nrows):
+            if k >= batch:
+                break
+            grid.narrow(1, y * height, height).narrow(2, x * width, width).copy_(tensor[k])
+            k = k + 1
+    return grid
+
+@torch.no_grad()
 def tensor_to_image(tensor, imtype=np.uint8):
     """
     converts a torch tensor to a numpy image
     """
-    if isinstance(tensor, torch.Tensor):
-        if tensor.dim() == 4:
-            image_numpy = tensor[0,:,:,:].data.cpu().float().numpy()
-        else:
-            image_numpy = tensor.data.cpu().float().numpy()
-    else:
-        if len(tensor.shape) == 4:
-            image_numpy = tensor[0,:,:,:]
-        else:
-            image_numpy = tensor
-    if image_numpy.shape[0] == 1:
-        image_numpy = np.tile(image_numpy, (3, 1, 1))
-    image_numpy = (np.transpose(image_numpy, (1, 2, 0)) + 1) / 2.0 * 255.0
+    tensor = make_grid(tensor/ 2.0 + 0.5)
+    image_numpy = tensor.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to('cpu', torch.uint8).numpy()
     return image_numpy.astype(imtype)
 
+@torch.no_grad()
 def tensor_to_mask(tensor, imtype=np.uint8):
     """
     converts a torch tensor to a segmentation mask
     """
+    tensor = make_grid(tensor)
     if len(tensor.shape) == 4:
         image_numpy = tensor.squeeze().data.cpu().float().numpy()
     else:
         image_numpy = tensor.data.cpu().float().numpy()
     image_numpy = np.transpose(image_numpy, (1, 2, 0)) * 255.0
     return image_numpy.astype(imtype)
-
-def mask_to_image(img):
-    """
-    converts a mask to an image
-    """
-    return np.stack((img[:,:,0],img[:,:,0],img[:,:,0]),axis=2)
-
-def mask_to_heatmap(tensor, imtype=np.uint8, size=None):
-    """
-    converts a mask to a heatmap
-    """
-    image_numpy = tensor[0,0].cpu().float().numpy()
-    if size:
-        image_numpy=resize(image_numpy,size)
-    heatmap_marked = cm.jet(image_numpy)[..., :3] * 255.0
-    return heatmap_marked.transpose((2,0,1)).astype(imtype)
-
-def overlay(seed_img, heatmap_marked, alpha=0.5, imtype=np.uint8):
-    """
-    overlays heatmap on the seed image
-    """
-    if isinstance(seed_img, torch.Tensor):
-        seed_img = seed_img.squeeze().data.cpu().float().numpy()
-    img = seed_img * alpha + heatmap_marked * (1. - alpha)
-    return img.astype(imtype)
 
 def resize(img, size):
     """
@@ -100,34 +100,20 @@ def resize(img, size):
     image = image.resize(size)
     return np.array(image)
 
-def save_image(image_numpy, image_path):
+@torch.no_grad()
+def save_image(tensor, image_path):
     """
     saves image to disc as a PIL image
     """
+    image_numpy = tensor_to_image(tensor)
     os.makedirs(os.path.dirname(image_path), exist_ok=True)
     image_pil = Image.fromarray(image_numpy)
     image_pil.save(image_path)
 
+@torch.no_grad()
 def save_images(images, names):
     for img, name in zip(images, names):
-        os.makedirs(os.path.dirname(name), exist_ok=True)
-        img = Image.fromarray(tensor_to_image(img))
-        img.save(name)
-
-def varname(p):
-    for line in inspect.getframeinfo(inspect.currentframe().f_back)[3]:
-        m = re.search(r'\bvarname\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)', line)
-        if m:
-            return m.group(1)
-
-def print_numpy(x, val=True, shp=False):
-    x = x.astype(np.float64)
-    if shp:
-        print('shape,', x.shape)
-    if val:
-        x = x.flatten()
-        print('mean = %3.3f, min = %3.3f, max = %3.3f, median = %3.3f, std=%3.3f' % (
-            np.mean(x), np.min(x), np.max(x), np.median(x), np.std(x)))
+        save_image(img, name)
 
 #########################
 #### Helper classes #####
