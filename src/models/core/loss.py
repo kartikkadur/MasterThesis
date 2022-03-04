@@ -37,19 +37,20 @@ class GANLoss(nn.Module):
         super(GANLoss, self).__init__()
         self.register_buffer('ones', torch.tensor(1.0))
         self.register_buffer('zeros', torch.tensor(0.0))
+        self.loss_type = loss
         if loss == 'vanilla':
             self.loss = nn.BCEWithLogitsLoss()
         elif loss == 'bce':
             self.loss = nn.BCELoss()
         elif loss == 'lsgan':
             self.loss = nn.MSELoss()
-        elif loss == 'wgangp':
+        elif loss == 'wgangp' or 'hinge':
             self.loss = None
         else:
             raise NotImplementedError(f'Loss {loss} is not implemented')
 
-    def forward(self, inp, trg_is_real):
-        if self.loss is None:
+    def forward(self, inp, trg_is_real, is_dis=None):
+        if 'wgangp' in self.loss_type:
             if trg_is_real:
                 loss = -inp.mean()
             else:
@@ -64,9 +65,9 @@ class GANLoss(nn.Module):
 
 class VGGFeatureExtractor(nn.Module):
     """define pretrained vgg19 network for perceptual loss"""
-    def __init__(self, feature_layers, vgg_type='vgg19', requires_grad=False):
+    def __init__(self, feature_layers, vgg_type='vgg19', requires_grad=False, remove_pooling=True):
         super(VGGFeatureExtractor, self).__init__()
-        vgg_net = getattr(vgg, vgg_type)(pretrained=True).features
+        vgg_net = getattr(vgg, vgg_type)(pretrained=True)
         self.names = NAMES[vgg_type.replace('_bn', '')]
         self.feature_layers = []
         # max index of layers to be considered in the model
@@ -76,7 +77,15 @@ class VGGFeatureExtractor(nn.Module):
             if idx > max_idx:
                 max_idx = idx
             self.feature_layers.append(idx)
-        self.vgg_net = vgg_net[:max_idx + 1]
+        vgg_net = vgg_net.features[:max_idx+1]
+        # modify network based on parameters
+        self.vgg_net = nn.ModuleList()
+        for module in vgg_net:
+            if remove_pooling and isinstance(module, nn.MaxPool2d):
+                continue
+            else:
+                self.vgg_net.append(module)
+        self.vgg_net = nn.Sequential(*self.vgg_net)
         # set requires_grad to False
         for param in self.parameters():
             param.requires_grad = requires_grad

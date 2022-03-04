@@ -43,14 +43,15 @@ class Model(ABC, nn.Module):
         init_type = None if self.args.resume else self.args.init_type
         # initialize model
         for net in self.model:
-            self.model[net] = init_net(self.model[net], init_type=init_type, gpu_ids=self.args.gpu_ids, device=self.device)
-        # load checkpoint if provided
-        if self.args.resume or self.args.resume_opt:
-            self.load(self.args.resume, self.args.resume_opt)
-        # initialize lr scheduler
-        self.args.last_iter = -1 if self.args.resume_opt is None else self.args.last_iter
+            self.model[net] = init_net(self.model[net], init_type=init_type, gpu_ids=self.args.gpu_ids, device=self.device)    
         if 'train' in self.args.mode:
+            # initialize lr scheduler
+            self.args.last_iter = -1 if self.args.resume_opt is None else self.args.last_iter
             self.init_scheduler()
+            # load checkpoint
+            self.load(self.args.resume, self.args.resume_opt)
+        else:
+            self.load(self.args.resume)
 
     def init_scheduler(self):
         for opt in self.optimizer:

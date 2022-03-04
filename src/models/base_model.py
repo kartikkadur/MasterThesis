@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import time
 
 from models.core import networks
 from models.core import loss
@@ -9,21 +10,24 @@ class BaseModel(Model):
     def __init__(self, args):
         super(BaseModel, self).__init__(args)
         self.latent_dim = args.latent_dim
-        if args.concat:
-            self.concat = True
-        else:
-            self.concat = False
         # create models
         self.model.content_encoder = networks.ContentEncoder(args.input_dim,
                                                              dim=args.dim,
                                                              norm_layer=args.enc_norm)
-        if self.concat:
-            self.model.style_encoder = networks.StyleEncoderConcat(args.input_dim,
+        if self.args.reparam:
+            self.model.style_encoder = networks.ReparameterizedStyleEncoder(args.input_dim,
                                                                    output_dim=self.latent_dim,
                                                                    dim=args.dim,
                                                                    num_domains=args.num_domains,
                                                                    norm_layer=None,
                                                                    activation='lrelu')
+        else:
+            self.model.style_encoder = networks.StyleEncoder(args.input_dim,
+                                                             output_dim=self.latent_dim,
+                                                             dim=args.dim, 
+                                                             num_domains=args.num_domains,
+                                                             activation='lrelu')
+        if self.args.concat:
             self.model.decoder = networks.DecoderConcat(args.input_dim,
                                                         dim=self.model.content_encoder.output_dim, 
                                                         num_domains=args.num_domains,
@@ -32,11 +36,6 @@ class BaseModel(Model):
                                                         norm_layer=args.dec_norm,
                                                         dropout=args.use_dropout)
         else:
-            self.model.style_encoder = networks.StyleEncoder(args.input_dim,
-                                                             output_dim=self.latent_dim,
-                                                             dim=args.dim, 
-                                                             num_domains=args.num_domains,
-                                                             activation='lrelu')
             self.model.decoder = networks.Decoder(args.input_dim,
                                                   dim=self.model.content_encoder.output_dim,
                                                   latent_dim=self.latent_dim,
@@ -111,23 +110,27 @@ class BaseModel(Model):
         self.c_org = torch.cat((self.cls_a, self.cls_b), dim=0)
 
     def forward_random(self, img, z_r, c_trg):
+        start = time.time()
         z_c = self.model.content_encoder(img)
         img_fake = self.model.decoder(z_c, z_r, c_trg)
-        return img_fake
+        end = time.time()
+        return img_fake, end-start, torch.cuda.memory_reserved(0) / (1024 * 1024 * 1024)
 
     def forward_reference(self, img_src, img_ref, c_trg):
+        start = time.time()
         z_c = self.model.content_encoder(img_src)
-        if self.concat:
+        if self.args.reparam:
             z_s, _, _ = self.model.style_encoder(img_ref, c_trg)
         else:
             z_s = self.model.style_encoder(img_ref, c_trg)
         img_fake = self.model.decoder(z_c, z_s, c_trg)
-        return img_fake
+        end = time.time()
+        return img_fake, end-start, torch.cuda.memory_reserved(0) / (1024 * 1024 * 1024)
 
     def forward(self, img, c_org):
         z_c = self.model.content_encoder(img)
         z_ca, z_cb = torch.split(z_c, self.args.batch_size, dim=0)
-        if self.concat:
+        if self.args.reparam:
             z_s, mu, logvar = self.model.style_encoder(img, c_org)
         else:
             z_s = self.model.style_encoder(img, c_org)
@@ -171,7 +174,7 @@ class BaseModel(Model):
         cls_a, cls_b = torch.split(c_org, self.args.batch_size, dim=0)
         z_c = self.model.content_encoder(img)
         z_ca, z_cb = torch.split(z_c, self.args.batch_size, dim=0)
-        if self.concat:
+        if self.args.reparam:
             z_s, mu, logvar = self.model.style_encoder(img, c_org)
         else:
             z_s = self.model.style_encoder(img, c_org)
@@ -223,12 +226,18 @@ class BaseModel(Model):
     def backward_discriminator(self, netD, real, fake, c_org):
         # with fake images
         pred_fake, pred_fake_cls = netD(fake.detach())
-        loss_fake = self.gan_loss(pred_fake, 0)
         # with real images
         pred_real, pred_real_cls = netD(real)
-        loss_real = self.gan_loss(pred_real, 1)
-        # adv loss
-        loss_d_adv = loss_fake + loss_real
+        if self.args.use_ragan:
+            loss_d_adv = (self.gan_loss(pred_real - torch.mean(pred_fake), 1) +
+                                      self.gan_loss(pred_fake - torch.mean(pred_real), 0)) / 2
+        elif 'hinge' in self.args.gan_mode:
+            loss_d_adv = nn.ReLU()(1.0 - pred_real).mean() + nn.ReLU()(1.0 + pred_fake).mean()
+        else:
+            loss_fake = self.gan_loss(pred_fake, 0)
+            loss_real = self.gan_loss(pred_real, 1)
+            # adv loss
+            loss_d_adv = loss_fake + loss_real
         # classification loss
         loss_d_cls = self.classification_loss(pred_real_cls, c_org)
         # dis loss
@@ -259,7 +268,7 @@ class BaseModel(Model):
         cls_a, cls_b = torch.split(c_org, self.args.batch_size, dim=0)
         z_c = self.model.content_encoder(img)
         z_ca, z_cb = torch.split(z_c, self.args.batch_size, dim=0)
-        if self.concat:
+        if self.args.reparam:
             z_s, mu, logvar = self.model.style_encoder(img, c_org)
         else:
             z_s = self.model.style_encoder(img, c_org)
@@ -283,7 +292,7 @@ class BaseModel(Model):
         z_c_rec = self.model.content_encoder(img_fake)
         z_c_rec_b, z_c_rec_a = torch.split(z_c_rec, self.args.batch_size, dim=0)
         # style reconstruction
-        if self.concat:
+        if self.args.reparam:
             z_s_rec, mu_rec, logvar_rec = self.model.style_encoder(img_fake, c_org)
         else:
             z_s_rec = self.model.style_encoder(img_fake, c_org)
@@ -305,6 +314,17 @@ class BaseModel(Model):
                 loss_g_adv += self.gan_loss(out0[0], 1)
                 loss_g_cls += self.classification_loss(out0[1], c_org)
             loss_g_cls *= self.args.lambda_cls_G
+        elif self.args.use_ragan:
+            pred_real, _ = self.model.discriminator1(img)
+            pred_fake, pred_fake_cls = self.model.discriminator1(img_fake)
+            loss_g_adv = (self.gan_loss(pred_real - torch.mean(pred_fake), 0) +
+                                      self.gan_loss(pred_fake - torch.mean(pred_real), 1)) / 2
+            # classification
+            loss_g_cls = self.classification_loss(pred_fake_cls, c_org) * self.args.lambda_cls_G
+        elif 'hinge' in self.args.gan_mode:
+            pred_fake, pred_fake_cls = self.model.discriminator1(img_fake)
+            loss_g_adv = -pred_fake.mean()
+            loss_g_cls = self.classification_loss(pred_fake_cls, c_org) * self.args.lambda_cls_G
         else:
             pred_fake, pred_fake_cls = self.model.discriminator1(img_fake)
             loss_g_adv = self.gan_loss(pred_fake, 1)
@@ -321,7 +341,7 @@ class BaseModel(Model):
         # KL loss - z_c
         loss_kl_zc = self._l2_regularize(z_c) * 0.01
         # KL loss - z_s
-        if self.concat:
+        if self.args.reparam:
             kl_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
             loss_kl_zs = torch.sum(kl_element).mul_(-0.5) * 0.01
         else:
@@ -371,13 +391,24 @@ class BaseModel(Model):
                 loss_g_adv2 += self.gan_loss(out0[0], 1)
                 loss_g_cls2 += self.classification_loss(out0[1], c_org)
             loss_g_cls2 *= self.args.lambda_cls_G
+        elif self.args.use_ragan:
+            pred_real, _ = self.model.discriminator2(img)
+            pred_fake, pred_fake_cls = self.model.discriminator1(img_random)
+            loss_g_adv2 = (self.gan_loss(pred_real - torch.mean(pred_fake), 0) +
+                                      self.gan_loss(pred_fake - torch.mean(pred_real), 1)) / 2
+            # classification
+            loss_g_cls2 = self.classification_loss(pred_fake_cls, c_org) * self.args.lambda_cls_G
+        elif 'hinge' in self.args.gan_mode:
+            pred_fake, pred_fake_cls = self.model.discriminator2(img_random)
+            loss_g_adv2 = -pred_fake.mean()
+            loss_g_cls2 = self.classification_loss(pred_fake_cls, c_org) * self.args.lambda_cls_G
         else:
             pred_fake, pred_fake_cls = self.model.discriminator2(img_random)
             loss_g_adv2 = self.gan_loss(pred_fake, 1)
             # classification
             loss_g_cls2 = self.classification_loss(pred_fake_cls, c_org) * self.args.lambda_cls_G
         # latent regression loss
-        if self.concat:
+        if self.args.reparam:
             _, mu2, _= self.model.style_encoder(img_random, c_org)
             mu2_a, mu2_b = torch.split(mu2, self.args.batch_size, dim=0)
             loss_z_l1_a = self.l1_loss(mu2_a, z_sr)

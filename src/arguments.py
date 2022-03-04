@@ -29,11 +29,14 @@ class Arguments(object):
         self.parser.add_argument('--use_dropout', action='store_true', help='use dropout for the generator')
         self.parser.add_argument('--num_domains', type=int, default=2, help='number of domains in the dataset')
         self.parser.add_argument('--mode', type=str, default='train', help='train, val, test, etc')
-        self.parser.add_argument('--concat', action='store_true', help='concatenate attribute features for translation')
+        self.parser.add_argument('--concat', action='store_true', help='concatenate style features for translation')
+        self.parser.add_argument('--reparam', action='store_true', help='reparameterize generating style features')
         self.parser.add_argument('--use_dis_content', action='store_true', help='weather to use content discriminator')
         self.parser.add_argument('--latent_dim', type=int, default=8, help='size of latent dimention')
         self.parser.add_argument('--up_type', type=str, default='transpose', choices=['transpose', 'nearest', 'pixelshuffle'],
                                                                                     help='type of upsample layer to be used in decoder')
+        self.parser.add_argument('--dec_norm', type=str, default='layer', choices=['batch','instance', 'layer'], help='normalization layer to be used in decoder')
+        self.parser.add_argument('--enc_norm', type=str, default='instance', choices=['batch','instance', 'layer'], help='normalization layer to be used in encoder')
         # dataset parameters
         self.parser.add_argument('--dataset', type=str, default='PairedDataset', choices=get_modules(dataset), help='chooses how datasets are loaded.')
         self.parser.add_argument('--shuffle', action='store_true', help='if true, takes the batches randomly, else takes them in serial fashion')
@@ -79,8 +82,6 @@ class TrainArguments(Arguments):
     def __init__(self):
         super(TrainArguments, self).__init__()
         # normalization parameters
-        self.parser.add_argument('--dec_norm', type=str, default='layer', choices=['batch','instance', 'layer'], help='normalization layer to be used in decoder')
-        self.parser.add_argument('--enc_norm', type=str, default='instance', choices=['batch','instance', 'layer'], help='normalization layer to be used in encoder')
         self.parser.add_argument('--dis_norm', type=str, default=None, choices=['batch','instance', 'layer'], help='normalization layer to be used in discriminator')
         self.parser.add_argument('--norm_feat', action='store_true', help='parameter indicating whether to normalize features before calculating perceptual loss')
         # optimizer paramerets
@@ -108,6 +109,7 @@ class TrainArguments(Arguments):
         self.parser.add_argument('--ms_dis', action='store_true', help='use multiscale discriminator instead of the normal discriminator')
         self.parser.add_argument('--dis_sn', action='store_true', help='use spectral normalization in discriminator')
         self.parser.add_argument('--num_scales', type=int, default=3, help='number of downsampling to be performed in ms discriminator')
+        self.parser.add_argument('--use_ragan', action='store_true', help='use relativistic discriminator')
         # perceptual loss parameters
         self.parser.add_argument('--lambda_perceptual', type=float, default=1.0, help='weight for perceptual loss for Generator')
         self.parser.add_argument('--vgg_type', type=str, default='vgg19', help='vgg model to be used to calculate perceptual loss')
@@ -127,6 +129,8 @@ class TestArguments(Arguments):
         self.parser.add_argument('--targets', type=str, nargs='+', default=None, help='required target class')
         self.parser.add_argument('--multi_iter', type=int, default=0, help='apply random styles to multiple iterations')
         self.parser.add_argument('--save_visuals', action='store_true', help='save visuals for presentation')
+        self.parser.add_argument('--gen_grid', action='store_true', help='generates image grid if specified')
+        self.parser.add_argument('--gen_style', action='store_true', help='generates image style if specified')
 
     def parse(self):
         args = self.parser.parse_args()

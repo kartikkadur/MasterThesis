@@ -5,7 +5,7 @@ import inspect
 import re
 import numpy as np
 import matplotlib.cm as cm
-
+import torchvision
 from inspect import isclass
 from collections import OrderedDict
 from PIL import Image
@@ -75,7 +75,7 @@ def tensor_to_image(tensor, imtype=np.uint8):
     """
     converts a torch tensor to a numpy image
     """
-    tensor = make_grid(tensor/ 2.0 + 0.5)
+    tensor = make_grid(tensor/2.0+0.5)
     image_numpy = tensor.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to('cpu', torch.uint8).numpy()
     return image_numpy.astype(imtype)
 
@@ -113,8 +113,8 @@ def save_image(tensor, image_path):
 @torch.no_grad()
 def save_images(images, names):
     for img, name in zip(images, names):
-        save_image(img, name)
-
+        os.makedirs(os.path.dirname(name), exist_ok=True)
+        torchvision.utils.save_image(img/2.0+0.5, name)
 #########################
 #### Helper classes #####
 #########################

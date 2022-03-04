@@ -142,14 +142,14 @@ class AdaINResnetBlock(nn.Module):
     def __init__(self, input_dim:int,
                        output_dim:int,
                        dropout:bool = False,
-                       latent_dim:int = 256,
+                       style_dim:int = 256,
                        padding_type:str = 'reflect',
                        activation:str = 'relu'):
         super(AdaINResnetBlock, self).__init__()
         self.activation = get_activation_layer(activation)()
         self.conv1 = ConvBlock(input_dim, output_dim, 3, 1, 1, padding_type=padding_type)
         self.conv2 = ConvBlock(output_dim, output_dim, 3, 1, 1, padding_type=padding_type)
-        self.norm = AdaptiveInstanceNorm(latent_dim, output_dim)
+        self.norm = AdaptiveInstanceNorm(output_dim, style_dim)
         if dropout:
             self.dropout = nn.Dropout(0.5)
         else:

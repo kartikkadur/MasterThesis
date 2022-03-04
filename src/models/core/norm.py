@@ -21,14 +21,13 @@ class LayerNorm(nn.Module):
             return F.layer_norm(x, normalized_shape)
 
 class AdaptiveInstanceNorm(nn.Module):
-    def __init__(self, latent_dim,
-                       num_features):
+    def __init__(self, num_features, style_dim):
         super(AdaptiveInstanceNorm, self).__init__()
         self.norm = nn.InstanceNorm2d(num_features, affine=False)
-        self.fc = nn.Linear(latent_dim, num_features*2)
+        self.fc = nn.Linear(style_dim, num_features*2)
 
-    def forward(self, x, z):
-        h = self.fc(z)
+    def forward(self, x, s):
+        h = self.fc(s)
         h = h.view(h.size(0), h.size(1), 1, 1)
-        w, b = torch.chunk(h, chunks=2, dim=1)
-        return w * self.norm(x) + b
+        weight, bias = torch.chunk(h, chunks=2, dim=1)
+        return (1 + weight) * self.norm(x) + bias

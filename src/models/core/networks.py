@@ -84,7 +84,7 @@ class StyleEncoder(nn.Module):
         output = self.model(x_c)
         return output.view(output.size(0), -1)
 
-class StyleEncoderConcat(nn.Module):
+class ReparameterizedStyleEncoder(nn.Module):
     def __init__(self, input_dim:int,
                        output_dim:int = 8,
                        dim:int = 64,
@@ -107,7 +107,7 @@ class StyleEncoderConcat(nn.Module):
             activation  : type of activation layer to be used. Default : None
             bias        : use bias or not. Default : True
         """
-        super(StyleEncoderConcat, self).__init__()
+        super(ReparameterizedStyleEncoder, self).__init__()
         if isinstance(norm_layer, str):
             norm_layer = get_norm_layer(norm_layer)
         if isinstance(activation, str):
@@ -130,6 +130,7 @@ class StyleEncoderConcat(nn.Module):
     def reparameterize(self, mu, logvar):
         std = logvar.mul(0.5).exp_()
         eps = torch.FloatTensor(std.size()).normal_().to(mu.device)
+        #eps = torch.randn(std.size()).to(mu.device)
         z_style = eps.mul(std).add_(mu)
         return z_style
 
@@ -143,79 +144,6 @@ class StyleEncoderConcat(nn.Module):
         logvar = self.fcVar(conv_flat)
         z_style = self.reparameterize(mu, logvar)
         return z_style, mu, logvar
-
-class MultiTaskStyleEncoder(StyleEncoderConcat):
-    def __init__(self, input_dim:int,
-                       output_dim:int = 256,
-                       dim:int = 64,
-                       n_blocks:int = 4,
-                       num_domains:int = 2,
-                       norm_layer:str = None,
-                       activation:str = None,
-                       bias:bool = True):
-        """
-        Encodes domain invarient features into a style code.
-        This encoder encodes the style code to a seperate output branch
-        based on the target domain.
-        Arguments:
-            input_dim   : number of channels in the input image, Usually 3
-            output_dim  : the size of the style code, Default : 256
-            dim         : dimention to be increased at each downsampling layer. Default : 64
-            n_blocks    : number of resnet blocks to be added. Default : 4
-            num_domains : number of target domains. Default : 2
-            norm_layer  : type of normalization layer to be used. Default : None
-            activation  : type of activation layer to be used. Default : None
-            bias        : use bias or not. Default : True
-        """
-        super(MultiTaskStyleEncoder, self).__init__(input_dim, output_dim, dim, n_blocks,
-                                                    0, norm_layer, activation, bias)
-        self.fc = nn.ModuleList()
-        for _ in range(num_domains):
-            self.fc.append(nn.Linear(self.out_nch, output_dim))
-        self.output_dim = output_dim
-
-    def forward(self, x, c):
-        h = self.model(x)
-        h = h.view(h.size(0), h.size(1))
-        out = []
-        for module in self.fc:
-            out.append(module(h))
-        out = torch.stack(out, dim=1)
-        idx = torch.LongTensor(range(c.size(0))).to(c.device)
-        z_style = out[idx, c]
-        return z_style
-
-class MappingNetwork(nn.Module):
-    def __init__(self, input_dim:int = 8,
-                       output_dim:int = 256,
-                       num_domains:int = 2):
-        """
-        Generated a style code from the random input code.
-        Arguments:
-            input_dim   : number of channels in the input image, Usually 3
-            output_dim  : the size of the style code, Default : 8
-            num_domains : number of downsampling layers. Default : 2
-        """
-        super().__init__()
-        self.model = nn.ModuleList()
-        self.model.append(nn.Linear(input_dim + num_domains, 512))
-        self.model.append(nn.ReLU())
-        for _ in range(3):
-            self.model.append(nn.Linear(512, 512))
-            self.model.append(nn.ReLU())
-        self.model.append(nn.Sequential(nn.Linear(512, 512),
-                                        nn.ReLU(),
-                                        nn.Linear(512, 512),
-                                        nn.ReLU(),
-                                        nn.Linear(512, 512),
-                                        nn.ReLU(),
-                                        nn.Linear(512, output_dim)))
-        self.model = nn.Sequential(*self.model)
-
-    def forward(self, z, c):
-        z_c = torch.cat([c, z], dim=1)
-        z_style = self.model(z_c)
-        return z_style
 
 class Decoder(nn.Module):
     def __init__(self, output_dim:int,
@@ -260,11 +188,11 @@ class Decoder(nn.Module):
             self.dec2.append(ConvBlock(dim, output_dim, 7, 1, 3, activation='tanh'))
         self.dec2 = nn.Sequential(*self.dec2)
         self.linear = nn.Sequential(
-                        nn.Linear(latent_dim + num_domains, 256),
-                        nn.ReLU(inplace=True),
-                        nn.Linear(256, 256),
-                        nn.ReLU(inplace=True),
-                        nn.Linear(256, self.dim_add*n_blocks))
+                    nn.Linear(latent_dim + num_domains, 256),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(256, 256),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(256, self.dim_add*n_blocks))
 
     def forward(self, x, z, c):
         z_c = torch.cat([c, z], 1)
@@ -280,31 +208,41 @@ class AdaINDecoder(nn.Module):
     def __init__(self, output_dim:int,
                        dim:int = 256,
                        n_blocks:int = 4,
+                       num_domains:int = 2,
                        num_ups:int = 2,
-                       latent_dim:int = 256,
+                       latent_dim:int = 8,
                        up_type:str = 'transpose',
+                       res_norm:str = 'adain',
                        dropout:bool = False,
                        norm_layer:str = 'layer',
                        activation:str = 'relu',
                        bias:bool = True):
         """
-        Uses adaptive instance normalization to inject style intp the image.
+        Given a encoded content and style, the decoder maps the code
+        back to the image space.
         Arguments:
             output_dim  : the size of the output feature, usually 3.
             dim         : style code dimention. Default : 256
             n_blocks    : number of resnet blocks to be added. Default : 4
+            num_domains : number of target domains. Default : 2
             num_ups     : number of upsampling layers. Default : 2
             latent_dim  : size of the latent code. Default : 8
             up_type     : type of upsampling to be used. Options [transpose, nearest, pixel]
-            dropout     : boolian indicatig weather to use dropout or not. Default : False
+            res_norm    : type of resnet normalization
+            dropout     : use dropout or not. Default : False
             norm_layer  : type of normalization layer to be used. Default : None
             activation  : type of activation layer to be used. Default : None
             bias        : use bias or not. Default : True
         """
         super(AdaINDecoder, self).__init__()
+        self.dim_add = dim
         self.dec1 = nn.ModuleList()
-        for i in range(n_blocks):
-            self.dec1.append(AdaINResnetBlock(dim, dim, latent_dim=latent_dim, dropout=dropout))
+        if 'adain' in res_norm:
+            for i in range(n_blocks):
+                self.dec1.append(AdaINResnetBlock(dim, self.dim_add, style_dim=self.dim_add, dropout=dropout))
+        else:
+            for i in range(n_blocks):
+                self.dec1.append(ResnetBlock(dim, self.dim_add, dropout=dropout))
         self.dec2 = nn.ModuleList()
         for i in range(num_ups):
             self.dec2.append(UpsampleBlock(dim, dim//2, 3, 2, 1, 1, norm_layer=norm_layer, activation=activation, up_type=up_type, bias=bias))
@@ -314,11 +252,20 @@ class AdaINDecoder(nn.Module):
         else:
             self.dec2.append(ConvBlock(dim, output_dim, 7, 1, 3, activation='tanh'))
         self.dec2 = nn.Sequential(*self.dec2)
+        if 'adain' in res_norm:
+            self.linear = nn.Sequential(
+                            nn.Linear(latent_dim + num_domains, 256),
+                            nn.ReLU(inplace=True),
+                            nn.Linear(256, 256),
+                            nn.ReLU(inplace=True),
+                            nn.Linear(256, self.dim_add))
 
-    def forward(self, x, z):
+    def forward(self, x, z, c):
+        z_c = torch.cat([c, z], 1)
+        z_c = self.linear(z_c)
         out = x
         for dec in self.dec1:
-            out = dec(out, z)
+            out = dec(out, z_c)
         out = self.dec2(out)
         return out
 
@@ -517,44 +464,6 @@ class MultiScaleDiscriminator(nn.Module):
             outputs.append((dis, c.view(c.size(0), c.size(1))))
             x = self.downsample(x)
         return outputs
-
-class MultiTaskDiscriminator(Discriminator):
-    def __init__(self, input_dim:int,
-                       dim:int = 64,
-                       n_layers:int = 6,
-                       num_domains:int = 0,
-                       norm_layer:str = None,
-                       activation:str = 'lrelu',
-                       padding_type:str = 'reflect',
-                       bias:bool = True,
-                       sn:bool = False,
-                       image_size:int = 256):
-        """
-        Discriminator discriminates between real and fake samples.
-        Seperate branch is added for discriminating each domain.
-        Arguments:
-            input_dim  : the size of the input feature, usually 3.
-            dim         : style code dimention. Default : 256
-            n_layers    : number of layers to be added. Default : 4
-            num_domains : number of target domains. Default : 2
-            norm_layer  : type of normalization layer to be used. Default : None
-            activation  : type of activation layer to be used. Default : lrelu
-            padding_type: type of padding layer to be used. Default : reflect
-            bias        : use bias or not. Default : True
-            sn          : use spectral normalization or not. Default : False
-            image_size  : input image size. Default:256
-        """
-        super(MultiTaskDiscriminator, self).__init__(input_dim, dim, n_layers, num_domains, norm_layer, activation,
-                                                        padding_type, bias, sn, image_size)
-        self.conv1 = nn.Conv2d(self.output_dim, num_domains, kernel_size=1, stride=1, padding=1, bias=False)
-
-    def forward(self, x, c):
-        h = self.model(x)
-        out = self.conv1(h)
-        out = h.view(out.size(0), -1)
-        idx = torch.LongTensor(range(c.size(0))).to(c.device)
-        out = out[idx, c]
-        return out
 
 class ResnetGenerator(nn.Module):
     def __init__(self, input_dim:int,

@@ -16,12 +16,12 @@ class Images(enum.Enum):
 
 class SVOReader(object):
     '''Reads a svo encoded video files and returns frames as images/converted video'''
-    def __init__(self, fpath, outdir, output='frames', images=Images.LEFT):
+    def __init__(self, fpath, outdir, outfmt='frames', images=Images.LEFT):
         self.outdir = outdir
-        self.output = output
+        self.outfmt = outfmt
         self.images = images
-        if 'video' in output:
-            self.fname = os.path.basename(fpath).split(".")[0] if 'video' in output else None
+        if 'video' in outfmt:
+            self.fname = os.path.basename(fpath).split(".")[0] if 'video' in outfmt else None
         else:
             self.outdir = os.path.join(outdir, os.path.basename(fpath).split(".")[0])
         # create directories
@@ -42,7 +42,7 @@ class SVOReader(object):
         image_size = self.cam.get_camera_information().camera_resolution
         self.width = image_size.width
         self.height = image_size.height
-        if 'video' in output:
+        if 'video' in outfmt:
             self.video_writer = cv2.VideoWriter(os.path.join(self.outdir, f'{self.fname}.avi'),
                                        cv2.VideoWriter_fourcc('M', '4', 'S', '2'),
                                        max(self.cam.get_camera_information().camera_fps, 25),
@@ -97,22 +97,33 @@ class SVOReader(object):
         self.video_writer.write(img_rgb)
 
     def write(self, image, frame_no):
-        if 'video' in self.output:
+        if 'video' in self.outfmt:
             self.write_video(image)
         else:
             self.write_image(image, frame_no)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if 'video' in self.output:
+        if 'video' in self.outfmt:
             self.video_writer.release()
         self.cam.close()
         cv2.destroyAllWindows()
 
 class FrameReader(object):
     """reads the video and returns frames"""
-    def __init__(self, fpath):
+    def __init__(self, fpath, outdir=None, outfmt='image'):
         self.filepath = fpath
         self.cam = cv2.VideoCapture(self.filepath)
+        self.outdir = outdir
+        self.outfmt = outfmt
+        if 'video' in self.outfmt:
+            self.writer = cv2.VideoWriter(os.path.join(fdir, fname),
+                                       cv2.VideoWriter_fourcc('M', '4', 'S', '2'),
+                                       25,
+                                       (256, 256))
+        else:
+            self.writer = cv2.imwrite
+            if not os.path.isdir(self.filepath):
+                self.outdir = os.path.join(outdir, os.path.basename(fpath).split(".")[0])
 
     def __enter__(self):
         return self
@@ -133,18 +144,25 @@ class FrameReader(object):
         else:
             raise RuntimeError("Camera is not opened")
         return frame
+    
+    def write(self, frame, frame_number):
+        #frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        if 'video' in self.outfmt:
+            self.writer.write(frame)
+        else:
+            self.writer(os.path.join(self.outdir, f'frame_{frame_number}.png'), frame)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if 'video' in self.output:
+        if 'video' in self.outfmt:
             self.videowriter.release()
         self.cam.release()
         cv2.destroyAllWindows()
 
 class FrameWriter(object):
-    def __init__(self, fdir, fname='video.avi', output='frames'):
-        self.output = output
+    def __init__(self, fdir, fname='video.avi', outfmt='frames'):
+        self.outfmt = outfmt
         self.outdir = fdir
-        if 'video' in self.output:
+        if 'video' in self.outfmt:
             self.writer = cv2.VideoWriter(os.path.join(fdir, fname),
                                        cv2.VideoWriter_fourcc('M', '4', 'S', '2'),
                                        25,
@@ -157,12 +175,12 @@ class FrameWriter(object):
 
     def write(self, frame, frame_number):
         #frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        if 'video' in self.output:
+        if 'video' in self.outfmt:
             self.writer.write(frame)
         else:
             self.writer.write(os.path.join(self.outdir, f'frame_{frame_number}.png'), frame)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if 'video' in self.output:
+        if 'video' in self.outfmt:
             self.writer.release()
         cv2.destroyAllWindows()

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import time
 
 from models.core import networks
 from models.core import loss
@@ -9,40 +10,50 @@ class AdaINModel(Model):
     def __init__(self, args):
         super(AdaINModel, self).__init__(args)
         self.latent_dim = args.latent_dim
-        self.style_dim = 64
         # create models
         self.model.content_encoder = networks.ContentEncoder(args.input_dim,
-                                                             dim=args.dim)
-        self.model.style_encoder = networks.StyleEncoderConcat(args.input_dim,
-                                                                output_dim=self.style_dim,
+                                                             dim=args.dim,
+                                                             norm_layer=args.enc_norm)
+        self.model.style_encoder = networks.ReparameterizedStyleEncoder(args.input_dim,
+                                                                output_dim=self.latent_dim,
                                                                 dim=args.dim,
                                                                 num_domains=args.num_domains,
                                                                 norm_layer=None,
                                                                 activation='lrelu')
-        self.model.rand_style_encoder = networks.MappingNetwork(args.latent_dim,
-                                                                self.style_dim,
-                                                                args.num_domains)
         self.model.decoder = networks.AdaINDecoder(args.input_dim,
                                                     dim=self.model.content_encoder.output_dim, 
-                                                    latent_dim=self.style_dim,
+                                                    num_domains=args.num_domains,
+                                                    latent_dim=self.latent_dim,
                                                     up_type=args.up_type,
-                                                    dropout=args.use_dropout,
-                                                    norm_layer=None)
+                                                    norm_layer=args.dec_norm,
+                                                    dropout=args.use_dropout)
         # create discriminators, optimizers and loss only while training
         if 'train' in args.mode:
-            self.model.discriminator1 = networks.Discriminator(args.input_dim,
-                                                                dim=args.dim,
-                                                                norm_layer=args.dis_norm,
-                                                                sn=args.dis_sn,
-                                                                num_domains=args.num_domains,
-                                                                image_size=args.crop_size)
-            self.model.discriminator2 = networks.Discriminator(args.input_dim,
-                                                                dim=args.dim,
-                                                                norm_layer=args.dis_norm,
-                                                                sn=args.dis_sn,
-                                                                num_domains=args.num_domains,
-                                                                image_size=args.crop_size)
-        # create optimizers
+            if args.ms_dis:
+                self.model.discriminator1 = networks.MultiScaleDiscriminator(args.input_dim,
+                                                                             norm_layer=args.dis_norm,
+                                                                             sn=args.dis_sn,
+                                                                             num_domains=args.num_domains,
+                                                                             num_scales=args.num_scales)
+                self.model.discriminator2 = networks.MultiScaleDiscriminator(args.input_dim,
+                                                                             norm_layer=args.dis_norm,
+                                                                             sn=args.dis_sn,
+                                                                             num_domains=args.num_domains,
+                                                                             num_scales=args.num_scales)
+            else:
+                self.model.discriminator1 = networks.Discriminator(args.input_dim,
+                                                                   dim=args.dim,
+                                                                   norm_layer=args.dis_norm,
+                                                                   sn=args.dis_sn,
+                                                                   num_domains=args.num_domains,
+                                                                   image_size=args.crop_size)
+                self.model.discriminator2 = networks.Discriminator(args.input_dim,
+                                                                   dim=args.dim,
+                                                                   norm_layer=args.dis_norm,
+                                                                   sn=args.dis_sn,
+                                                                   num_domains=args.num_domains,
+                                                                   image_size=args.crop_size)
+            # create optimizers
             for net in self.model:
                 self.optimizer[net] = torch.optim.Adam(self.model[net].parameters(),
                                                        lr=args.lr,
@@ -64,7 +75,7 @@ class AdaINModel(Model):
             self.l1_loss = nn.L1Loss().to(self.device)
             if args.vgg_loss is not None:
                 self.perceptual_loss = loss.VGGPerceptualLoss(args.vgg_layers, args.layer_weights, args.vgg_type,
-                                                                        args.vgg_loss, args.gpu_ids).to(self.device)
+                                                                        args.vgg_loss, args.gpu_ids, args.norm_feat).to(self.device)
             self.print_loss = ['g_adv', 'g_cls', 'l1_cc_rec']
             if self.args.vgg_loss is not None:
                 self.print_loss += ['g_p', 'g_p2']
@@ -83,42 +94,38 @@ class AdaINModel(Model):
         self.c_org = torch.cat((self.cls_a, self.cls_b), dim=0)
 
     def forward_random(self, img, z_r, c_trg):
-        trg = torch.zeros((self.args.num_domains,))
-        trg[c_trg] = 1
-        trg = trg.view(1, trg.size(0)).to(self.device)
+        start = time.time()
         z_c = self.model.content_encoder(img)
-        img_fake = self.model.decoder(z_c, z_r)
-        return img_fake
+        img_fake = self.model.decoder(z_c, z_r, c_trg)
+        end = time.time()
+        return img_fake, end-start, torch.cuda.memory_reserved(0) / (1024 * 1024 * 1024)
 
     def forward_reference(self, img_src, img_ref, c_trg):
-        trg = torch.zeros((self.args.num_domains,))
-        trg[c_trg] = 1
-        trg = trg.view(1, trg.size(0)).to(self.device)
+        start = time.time()
         z_c = self.model.content_encoder(img_src)
-        z_s, _, _ = self.model.style_encoder(img_ref, trg)
-        img_fake = self.model.decoder(z_c, z_s)
-        return img_fake
+        z_s, _, _ = self.model.style_encoder(img_ref, c_trg)
+        img_fake = self.model.decoder(z_c, z_s, c_trg)
+        end = time.time()
+        return img_fake, end-start, torch.cuda.memory_reserved(0) / (1024 * 1024 * 1024)
 
     def forward(self, img, c_org):
         z_c = self.model.content_encoder(img)
         z_ca, z_cb = torch.split(z_c, self.args.batch_size, dim=0)
         z_s, mu, logvar = self.model.style_encoder(img, c_org)
         z_sa, z_sb = torch.split(z_s, self.args.batch_size, dim=0)
-        z_sr = self.get_z_random(c_org.size(0), self.args.latent_dim)
-        z_r = self.model.rand_style_encoder(z_sr, c_org)
-        z_ra, z_rb = torch.split(z_r, self.args.batch_size, dim=0)
+        z_sr = self.get_z_random(self.args.batch_size, self.args.latent_dim)
         # translation from B -> A
         cls_a, cls_b = torch.split(c_org, self.args.batch_size, dim=0)
         content = torch.cat((z_cb, z_ca, z_cb), dim=0)
-        style = torch.cat((z_sa, z_sa, z_ra), dim=0)
+        style = torch.cat((z_sa, z_sa, z_sr), dim=0)
         trg_cls = torch.cat((cls_a, cls_a, cls_a), dim=0)
-        fake_imgs = self.model.decoder(content, style)
+        fake_imgs = self.model.decoder(content, style, trg_cls)
         img_ba, img_aa, img_br = torch.split(fake_imgs, self.args.batch_size, dim=0)
         # translation from A -> B
         content = torch.cat((z_ca, z_cb, z_ca), dim=0)
-        style = torch.cat((z_sb, z_sb, z_rb), dim=0)
+        style = torch.cat((z_sb, z_sb, z_sr), dim=0)
         trg_cls = torch.cat((cls_b, cls_b, cls_b), dim=0)
-        fake_imgs = self.model.decoder(content, style)
+        fake_imgs = self.model.decoder(content, style, trg_cls)
         img_ab, img_bb, img_ar = torch.split(fake_imgs, self.args.batch_size, dim=0)
         # concatinate images
         img_fake = torch.cat((img_ba, img_ab), dim=0)
@@ -137,25 +144,28 @@ class AdaINModel(Model):
         self.optimizer.content_discriminator.step()
 
     def update_discriminator(self, img, c_org):
-        backward_fn = self.backward_discriminator
+        if self.args.ms_dis:
+            backward_fn = self.backward_multi_scale_discriminator
+        else:
+            backward_fn = self.backward_discriminator
         # construct images
         cls_a, cls_b = torch.split(c_org, self.args.batch_size, dim=0)
         z_c = self.model.content_encoder(img)
         z_ca, z_cb = torch.split(z_c, self.args.batch_size, dim=0)
         z_s, mu, logvar = self.model.style_encoder(img, c_org)
         z_sa, z_sb = torch.split(z_s, self.args.batch_size, dim=0)
-        z_sr = self.get_z_random(c_org.size(0), self.args.latent_dim)
-        z_r = self.model.rand_style_encoder(z_sr, c_org)
-        z_ra, z_rb = torch.split(z_r, self.args.batch_size, dim=0)
+        z_sr = self.get_z_random(self.args.batch_size, self.args.latent_dim)
         # translation from B -> A
         content = torch.cat((z_cb, z_cb), dim=0)
-        style = torch.cat((z_sa, z_ra), dim=0)
-        fake_imgs = self.model.decoder(content, style)
+        style = torch.cat((z_sa, z_sr), dim=0)
+        trg_cls = torch.cat((cls_a, cls_a), dim=0)
+        fake_imgs = self.model.decoder(content, style, trg_cls)
         img_ba, img_br = torch.split(fake_imgs, self.args.batch_size, dim=0)
         # translation from A -> B
         content = torch.cat((z_ca, z_ca), dim=0)
-        style = torch.cat((z_sb, z_rb), dim=0)
-        fake_imgs = self.model.decoder(content, style)
+        style = torch.cat((z_sb, z_sr), dim=0)
+        trg_cls = torch.cat((cls_b, cls_b), dim=0)
+        fake_imgs = self.model.decoder(content, style, trg_cls)
         img_ab, img_ar = torch.split(fake_imgs, self.args.batch_size, dim=0)
         # concat images
         img_fake = torch.cat((img_ba, img_ab), dim=0)
@@ -169,15 +179,40 @@ class AdaINModel(Model):
         backward_fn(self.model.discriminator2, img, img_random, c_org)
         self.optimizer.discriminator2.step()
 
+    def backward_multi_scale_discriminator(self, netD, real, fake, c_org):
+        # with fake images
+        outputs_fake = netD(fake.detach())
+        outputs_real = netD(real)
+        loss_d_adv = 0
+        loss_d_cls = 0
+        for i, (out0, out1) in enumerate(zip(outputs_fake, outputs_real)):
+            # gan loss
+            loss_d_adv += self.gan_loss(out0[0], 0)
+            loss_d_adv += self.gan_loss(out1[0], 1)
+            # class loss
+            loss_d_cls += self.classification_loss(out1[1], c_org)
+        # dis loss
+        loss_d = loss_d_adv + self.args.lambda_cls * loss_d_cls
+        loss_d.backward()
+        self.loss.d_adv = loss_d_adv.item()
+        self.loss.d_cls = loss_d_cls.item()
+        self.loss.d_total = loss_d.item()
+
     def backward_discriminator(self, netD, real, fake, c_org):
         # with fake images
         pred_fake, pred_fake_cls = netD(fake.detach())
-        loss_fake = self.gan_loss(pred_fake, 0)
         # with real images
         pred_real, pred_real_cls = netD(real)
-        loss_real = self.gan_loss(pred_real, 1)
-        # adv loss
-        loss_d_adv = loss_fake + loss_real
+        if self.args.use_ragan:
+            loss_d_adv = (self.gan_loss(pred_real - torch.mean(pred_fake), 1) +
+                                      self.gan_loss(pred_fake - torch.mean(pred_real), 0)) / 2
+        elif 'hinge' in self.args.gan_mode:
+            loss_d_adv = nn.ReLU()(1.0 - pred_real).mean() + nn.ReLU()(1.0 + pred_fake).mean()
+        else:
+            loss_fake = self.gan_loss(pred_fake, 0)
+            loss_real = self.gan_loss(pred_real, 1)
+            # adv loss
+            loss_d_adv = loss_fake + loss_real
         # classification loss
         loss_d_cls = self.classification_loss(pred_real_cls, c_org)
         # dis loss
@@ -213,12 +248,14 @@ class AdaINModel(Model):
         # translation from B -> A
         content = torch.cat((z_cb, z_ca), dim=0)
         style = torch.cat((z_sa, z_sa), dim=0)
-        fake_imgs = self.model.decoder(content, style)
+        trg_cls = torch.cat((cls_a, cls_a), dim=0)
+        fake_imgs = self.model.decoder(content, style, trg_cls)
         img_ba, img_aa = torch.split(fake_imgs, self.args.batch_size, dim=0)
         # translation from A -> B
         content = torch.cat((z_ca, z_cb), dim=0)
         style = torch.cat((z_sb, z_sb), dim=0)
-        fake_imgs = self.model.decoder(content, style)
+        trg_cls = torch.cat((cls_b, cls_b), dim=0)
+        fake_imgs = self.model.decoder(content, style, trg_cls)
         img_ab, img_bb = torch.split(fake_imgs, self.args.batch_size, dim=0)
         # concat images
         img_fake = torch.cat((img_ba, img_ab), dim=0)
@@ -232,15 +269,36 @@ class AdaINModel(Model):
         # image reconstruction
         content = torch.cat((z_c_rec_a, z_c_rec_b), dim=0)
         style = torch.cat((z_s_rec_a, z_s_rec_b), dim=0)
-        img_recon = self.model.decoder(content, style)
+        trg_cls = torch.cat((cls_a, cls_b), dim=0)
+        img_recon = self.model.decoder(content, style, trg_cls)
         # content Ladv for generator
         if self.args.use_dis_content:
             loss_g_content = self.backward_content_discriminator(z_c)
         # Ladv for generator
-        pred_fake, pred_fake_cls = self.model.discriminator1(img_fake)
-        loss_g_adv = self.gan_loss(pred_fake, 1)
-        # classification
-        loss_g_cls = self.classification_loss(pred_fake_cls, c_org) * self.args.lambda_cls_G
+        if self.args.ms_dis:
+            outputs_fake = self.model.discriminator1(img_fake)
+            loss_g_adv = 0
+            loss_g_cls = 0
+            for out0 in outputs_fake:
+                loss_g_adv += self.gan_loss(out0[0], 1)
+                loss_g_cls += self.classification_loss(out0[1], c_org)
+            loss_g_cls *= self.args.lambda_cls_G
+        elif self.args.use_ragan:
+            pred_real, _ = self.model.discriminator1(img)
+            pred_fake, pred_fake_cls = self.model.discriminator1(img_fake)
+            loss_g_adv = (self.gan_loss(pred_real - torch.mean(pred_fake), 0) +
+                                      self.gan_loss(pred_fake - torch.mean(pred_real), 1)) / 2
+            # classification
+            loss_g_cls = self.classification_loss(pred_fake_cls, c_org) * self.args.lambda_cls_G
+        elif 'hinge' in self.args.gan_mode:
+            pred_fake, pred_fake_cls = self.model.discriminator1(img_fake)
+            loss_g_adv = -pred_fake.mean()
+            loss_g_cls = self.classification_loss(pred_fake_cls, c_org) * self.args.lambda_cls_G
+        else:
+            pred_fake, pred_fake_cls = self.model.discriminator1(img_fake)
+            loss_g_adv = self.gan_loss(pred_fake, 1)
+            # classification
+            loss_g_cls = self.classification_loss(pred_fake_cls, c_org) * self.args.lambda_cls_G
         # self recon
         loss_g_self = self.l1_loss(img, img_self) * self.args.lambda_rec
         # cross-cycle recon
@@ -283,37 +341,57 @@ class AdaINModel(Model):
         cls_a, cls_b = torch.split(c_org, self.args.batch_size, dim=0)
         z_c = self.model.content_encoder(img)
         z_ca, z_cb = torch.split(z_c, self.args.batch_size, dim=0)
-        z_sr = self.get_z_random(c_org.size(0), self.args.latent_dim)
-        z_r = self.model.rand_style_encoder(z_sr, c_org)
-        z_ra, z_rb = torch.split(z_r, self.args.batch_size, dim=0)
-        content = torch.cat([z_cb, z_ca], dim=0)
-        style = torch.cat([z_ra, z_rb], dim=0)
-        img_random = self.model.decoder(content, style)
-        img_br, img_ar = torch.split(img_random, self.args.batch_size, dim=0)
+        z_sr = self.get_z_random(self.args.batch_size, self.args.latent_dim)
+        # translation from B -> A
+        img_br = self.model.decoder(z_cb, z_sr, cls_a)
+        # translation from A -> B
+        img_ar = self.model.decoder(z_ca, z_sr, cls_b)
+        # concat images
+        img_random = torch.cat((img_br, img_ar), dim=0)
         # Ladv for generator
-        pred_fake, pred_fake_cls = self.model.discriminator2(img_random)
-        loss_g_adv = self.gan_loss(pred_fake, 1)
-        # classification
-        loss_g_cls = self.classification_loss(pred_fake_cls, c_org) * self.args.lambda_cls_G
+        if self.args.ms_dis:
+            outputs_fake = self.model.discriminator1(img_random)
+            loss_g_adv2 = 0
+            loss_g_cls2 = 0
+            for out0 in outputs_fake:
+                loss_g_adv2 += self.gan_loss(out0[0], 1)
+                loss_g_cls2 += self.classification_loss(out0[1], c_org)
+            loss_g_cls2 *= self.args.lambda_cls_G
+        elif self.args.use_ragan:
+            pred_real, _ = self.model.discriminator2.forward(img)
+            pred_fake, pred_fake_cls = self.model.discriminator1(img_random)
+            loss_g_adv2 = (self.gan_loss(pred_real - torch.mean(pred_fake), 0) +
+                                      self.gan_loss(pred_fake - torch.mean(pred_real), 1)) / 2
+            # classification
+            loss_g_cls2 = self.classification_loss(pred_fake_cls, c_org) * self.args.lambda_cls_G
+        elif 'hinge' in self.args.gan_mode:
+            pred_fake, pred_fake_cls = self.model.discriminator2(img_random)
+            loss_g_adv2 = -pred_fake.mean()
+            loss_g_cls2 = self.classification_loss(pred_fake_cls, c_org) * self.args.lambda_cls_G
+        else:
+            pred_fake, pred_fake_cls = self.model.discriminator2(img_random)
+            loss_g_adv2 = self.gan_loss(pred_fake, 1)
+            # classification
+            loss_g_cls2 = self.classification_loss(pred_fake_cls, c_org) * self.args.lambda_cls_G
         # latent regression loss
         _, mu2, _= self.model.style_encoder(img_random, c_org)
         mu2_a, mu2_b = torch.split(mu2, self.args.batch_size, dim=0)
-        loss_z_l1_a = self.l1_loss(mu2_a, z_ra)
-        loss_z_l1_b = self.l1_loss(mu2_b, z_rb)
+        loss_z_l1_a = self.l1_loss(mu2_a, z_sr)
+        loss_z_l1_b = self.l1_loss(mu2_b, z_sr)
         loss_z_l1 = (loss_z_l1_a + loss_z_l1_b) * 10
         # perceptual
         if self.args.vgg_loss is not None:
             img_random = torch.cat((img_ar, img_br), dim=0)
             loss_g_p =  self.perceptual_loss(img, img_random) * self.args.lambda_perceptual
         # total G loss
-        loss_g = loss_z_l1 + loss_g_adv + loss_g_cls
+        loss_g = loss_z_l1 + loss_g_adv2 + loss_g_cls2
         if self.args.vgg_loss is not None:
             loss_g += loss_g_p
             self.loss.g_p2 = loss_g_p.item()
         loss_g.backward()
         self.loss.l1_recon_z = loss_z_l1.item()
-        self.loss.gan2 = loss_g_adv.item()
-        self.loss.gan2_cls = loss_g_cls.item()
+        self.loss.gan2 = loss_g_adv2.item()
+        self.loss.gan2_cls = loss_g_cls2.item()
 
     def _l2_regularize(self, mu):
         mu_2 = torch.pow(mu, 2)
