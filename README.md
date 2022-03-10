@@ -18,3 +18,7 @@ There is a shell script file for training the model (train.sh). Edit the require
 ```
 bash ./train.sh
 ```
+
+## Translations
+
+![Translation](https://github.com/kartikkadur/MasterThesis/blob/main/images/translation.jpg)
