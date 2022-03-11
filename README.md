@@ -20,5 +20,5 @@ bash ./train.sh
 ```
 
 ## Translations
-
+![Process](https://github.com/kartikkadur/MasterThesis/blob/main/images/process.jpg)
 ![Translation](https://github.com/kartikkadur/MasterThesis/blob/main/images/translation.png)
