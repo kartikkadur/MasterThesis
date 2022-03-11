@@ -221,7 +221,7 @@ class Sampler(object):
             else:
                 # run sample method
                 block.log("Running sample")
-                self.sample_diverse(args, model, dataloader, args.targets, args.reference, device)
+                self.sample(args, model, dataloader, args.targets, args.reference, device)
             
 if __name__ == "__main__":
     sampler = Sampler()

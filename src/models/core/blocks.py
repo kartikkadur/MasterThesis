@@ -62,7 +62,7 @@ class UpsampleBlock(nn.Module):
         super(UpsampleBlock, self).__init__()
         self.block = []
         # add padding, norm and activation layers if passed
-        padding_layer = get_padding_layer(padding_type)
+        padding_type = get_padding_layer(padding_type)
         activation = get_activation_layer(activation)
         norm_layer = get_norm_layer(norm_layer)
         # add layers to block
