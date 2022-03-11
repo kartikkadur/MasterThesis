@@ -21,4 +21,4 @@ bash ./train.sh
 
 ## Translations
 
-![Translation](https://github.com/kartikkadur/MasterThesis/blob/main/images/translation.jpg)
+![Translation](https://github.com/kartikkadur/MasterThesis/blob/main/images/translation.png)
