@@ -1,6 +1,6 @@
 # Master Thesis
-# Style Transfer using Generative Adversarial Networks
-A deep generative model for performing style transfer. This repository provides code for performing style transfer between multiple target domains.
+# Multi-model Multi-domain Image-to-Image translation
+A deep generative model for performing image-to-image translations between multiple weather domains.
 
 ## Pretrained weights
 The pretrained weights can be downloaded from the links below:
