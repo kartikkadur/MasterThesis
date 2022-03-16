@@ -1,4 +1,4 @@
-# Multi-modal Multi-domain Image-to-Image translation
+# Multi-modal and Multi-domain Image-to-Image translation
 A deep generative model for performing image-to-image translations between multiple weather domains.
 
 ## Pretrained weights
