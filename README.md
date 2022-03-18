@@ -38,5 +38,5 @@ Run `python train.py -h` for more information on commandline options
 bash ./train.sh
 ```
 
-## Translations
-![Process](https://github.com/kartikkadur/MasterThesis/blob/main/images/process.jpg)
+## Translations grid
+![MT](https://github.com/kartikkadur/MasterThesis/blob/main/images/multi_translations.png)
