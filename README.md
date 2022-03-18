@@ -1,7 +1,7 @@
 # Multi-modal and Multi-domain Image-to-Image translation
 This work aims at developing deep learning models to perform multi-modal and multi-domain image translations between different weather domains. The work propose three deep learning model configurations that combine several state-of-the art ideas in performing image translations. The ideas from GANs and VAEs are utilized in building these configurations to achieve high quality and diversity translations. See the file [MODELCONFIG.md](https://github.com/kartikkadur/MasterThesis/blob/main/MODELCONFIG.md) for the architecture of these configurations.
 ### Example Translations
-![Translation](https://github.com/kartikkadur/MasterThesis/blob/main/images/translation.png)
+![Translation](https://github.com/kartikkadur/MasterThesis/blob/main/images/translation.jpg)
 
 ## Dependencies
 You can install all the dependencies by 
