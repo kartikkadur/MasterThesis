@@ -26,9 +26,3 @@ Injects style using depth-wise concatination operation on the encoded content fe
 ### AdaINModel
 Injects style using Adaptive Instance Normalization (AdaIN) operations in the decoder residual blocks.
 ![adain_model](https://github.com/kartikkadur/MasterThesis/blob/main/images/adainmodel.png)
-
-## Synthesis techniques
-### Reference-based Synthesis
-![ref](https://github.com/kartikkadur/MasterThesis/blob/main/images/reference_based_synthesis.png)
-### Random-based Synthesis
-![ran](https://github.com/kartikkadur/MasterThesis/blob/main/images/random_based_synthesis.png)
